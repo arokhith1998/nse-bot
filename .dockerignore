@@ -1,0 +1,15 @@
+frontend/
+legacy/
+seed/
+.git/
+.claude/
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+node_modules/
+.next/
+README.md
