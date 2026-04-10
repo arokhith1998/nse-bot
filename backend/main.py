@@ -10,7 +10,9 @@ Run with::
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
@@ -39,50 +41,47 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Application lifespan manager.
-
-    On startup:
-        - Initialise the database (create tables if needed).
-        - Start the background scheduler (scan, news refresh, etc.).
-
-    On shutdown:
-        - Stop the scheduler gracefully.
-        - Close the database connection pool.
-    """
+    """Application lifespan manager."""
     # -- Startup --------------------------------------------------------
     logger.info("Starting NSE Market Intelligence Platform ...")
     await init_db()
     logger.info("Database initialised at %s", settings.resolved_db_path)
 
-    # Start the scheduler if available
-    scheduler = None
+    # Start the scheduler
+    sched = None
     try:
-        from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
-
-        scheduler = AsyncIOScheduler()
-        # TODO: Register scheduled jobs here:
-        # scheduler.add_job(scan_universe, "interval", minutes=settings.scan_interval_min)
-        # scheduler.add_job(refresh_news, "interval", minutes=settings.news_refresh_interval_min)
-        # scheduler.add_job(regime_snapshot, "interval", minutes=5)
-        scheduler.start()
-        logger.info("APScheduler started.")
-    except ImportError:
-        logger.warning(
-            "apscheduler not installed. Background scheduler disabled. "
-            "Install with: pip install apscheduler"
-        )
+        from backend.scheduler import start_scheduler, shutdown_scheduler
+        sched = await start_scheduler()
+        logger.info("Scheduler started with %d jobs.", len(sched.get_jobs()))
     except Exception:
         logger.exception("Failed to start scheduler.")
+
+    # Run initial scan in background (don't block startup)
+    asyncio.create_task(_initial_scan())
 
     yield
 
     # -- Shutdown -------------------------------------------------------
-    if scheduler is not None:
-        scheduler.shutdown(wait=False)
-        logger.info("APScheduler shut down.")
+    try:
+        from backend.scheduler import shutdown_scheduler
+        await shutdown_scheduler()
+    except Exception:
+        pass
 
     await close_db()
     logger.info("NSE Market Intelligence Platform stopped.")
+
+
+async def _initial_scan() -> None:
+    """Run a full scan on startup to populate the database."""
+    await asyncio.sleep(2)  # Let the app finish starting
+    logger.info("Running initial scan to populate database...")
+    try:
+        from backend.modules.scanner import run_full_scan
+        summary = await run_full_scan()
+        logger.info("Initial scan complete: %s", summary)
+    except Exception:
+        logger.exception("Initial scan failed (non-fatal, scheduler will retry)")
 
 
 # =====================================================================
@@ -107,8 +106,6 @@ app = FastAPI(
 # CORS middleware
 # =====================================================================
 
-import os as _os
-
 _cors_origins = [
     "http://localhost:3000",       # Next.js dev server
     "http://127.0.0.1:3000",
@@ -116,7 +113,7 @@ _cors_origins = [
     "http://127.0.0.1:8000",
 ]
 # Add the Vercel frontend URL when deployed
-_frontend_url = _os.environ.get("FRONTEND_URL", "")
+_frontend_url = os.environ.get("FRONTEND_URL", "")
 if _frontend_url:
     _cors_origins.append(_frontend_url.rstrip("/"))
 
@@ -133,10 +130,14 @@ app.add_middleware(
 # Mount routers
 # =====================================================================
 
+from backend.api.frontend_api import router as frontend_router     # noqa: E402
 from backend.api.dashboard_api import router as dashboard_router  # noqa: E402
 from backend.api.webhook_routes import router as webhook_router    # noqa: E402
 from backend.api.backtest_routes import router as backtest_router  # noqa: E402
 
+# Frontend-compatible routes first (match the frontend's expected paths/shapes)
+app.include_router(frontend_router)
+# Original detailed API routes (accessible via /api/picks/live, /api/regime/current, etc.)
 app.include_router(dashboard_router)
 app.include_router(webhook_router)
 app.include_router(backtest_router)
@@ -146,7 +147,6 @@ app.include_router(backtest_router)
 # Static files
 # =====================================================================
 
-# Serve files from backend/data/ (exports, reports, etc.)
 _data_dir = Path(__file__).resolve().parent / "data"
 _data_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static/data", StaticFiles(directory=str(_data_dir)), name="static-data")
@@ -158,13 +158,11 @@ app.mount("/static/data", StaticFiles(directory=str(_data_dir)), name="static-da
 
 @app.get("/", include_in_schema=False)
 async def root() -> JSONResponse:
-    """Root endpoint with link to API documentation."""
     return JSONResponse(
         content={
             "name": "NSE Market Intelligence",
             "version": "1.0.0",
             "docs": "/docs",
-            "redoc": "/redoc",
             "health": "/health",
         }
     )
@@ -172,18 +170,15 @@ async def root() -> JSONResponse:
 
 @app.get("/health", tags=["system"])
 async def health_check() -> JSONResponse:
-    """Health check endpoint for monitoring and load balancers."""
     health: dict = {
         "status": "ok",
         "database": "unknown",
         "scheduler": "unknown",
     }
 
-    # Check database connectivity
     try:
         from backend.database import AsyncSessionLocal
         from sqlalchemy import text
-
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
         health["database"] = "connected"
@@ -191,14 +186,18 @@ async def health_check() -> JSONResponse:
         health["database"] = f"error: {exc}"
         health["status"] = "degraded"
 
-    # Check WebSocket manager
+    try:
+        from backend.scheduler import scheduler as sched
+        health["scheduler"] = "running" if (sched and sched.running) else "stopped"
+    except Exception:
+        health["scheduler"] = "unavailable"
+
     try:
         from backend.api.dashboard_api import ws_manager
         health["websocket_clients"] = ws_manager.active_count
     except Exception:
         health["websocket_clients"] = 0
 
-    # Settings summary
     health["config"] = {
         "capital": settings.capital,
         "max_open_positions": settings.max_open_positions,

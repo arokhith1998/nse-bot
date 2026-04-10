@@ -2,7 +2,7 @@
 NSE Market Intelligence Platform - Scheduler
 =============================================
 APScheduler (AsyncIOScheduler) with Asia/Kolkata timezone.
-Each job is a thin wrapper that delegates to the appropriate module.
+Each job is a thin wrapper that delegates to the scanner module.
 """
 from __future__ import annotations
 
@@ -22,82 +22,105 @@ _TZ = "Asia/Kolkata"
 scheduler: Optional[AsyncIOScheduler] = None
 
 
-# ─── Job stubs ───────────────────────────────────────────────────────────
-# Each function is invoked by APScheduler.  The actual heavy lifting lives
-# in dedicated modules under ``backend/modules/`` and ``backend/services/``.
-# This keeps the scheduler file small and testable.
+# ─── Job implementations ────────────────────────────────────────────────
 
 
 async def job_pre_market_scan() -> None:
     """08:45 IST - Pre-market analysis: regime snapshot, universe filter, signal generation."""
     logger.info("[scheduler] Running pre-market scan …")
-    # TODO: call into backend.modules.scanner.run_pre_market_scan()
-    # Steps:
-    #   1. Refresh universe from NSE EQUITY_L.csv
-    #   2. Capture regime snapshot (VIX, breadth, index trends)
-    #   3. Generate candidate signals for the day
-    logger.info("[scheduler] Pre-market scan complete.")
+    try:
+        from backend.modules.scanner import run_full_scan
+        summary = await run_full_scan()
+        logger.info("[scheduler] Pre-market scan complete: %s", summary)
+    except Exception:
+        logger.exception("[scheduler] Pre-market scan failed")
 
 
 async def job_market_hours_scan() -> None:
     """Every 15 min during 09:15-15:15 IST - Intraday signal refresh."""
     logger.info("[scheduler] Running intraday scan …")
-    # TODO: call into backend.modules.scanner.run_intraday_scan()
-    # Steps:
-    #   1. Fetch live prices for universe
-    #   2. Re-score existing signals, generate new ones
-    #   3. Check open trades for SL/target hits
-    #   4. Update regime snapshot
-    logger.info("[scheduler] Intraday scan complete.")
+    try:
+        from backend.modules.scanner import run_regime_scan, run_stock_scan
+        regime = await run_regime_scan()
+        regime_label = regime.get("label", "RANGE_CHOP") if regime else "RANGE_CHOP"
+        count = await run_stock_scan(regime_label)
+        logger.info("[scheduler] Intraday scan complete: %d signals, regime=%s", count, regime_label)
+    except Exception:
+        logger.exception("[scheduler] Intraday scan failed")
 
 
 async def job_news_refresh() -> None:
     """Every 30 min - Refresh news feeds and recompute weighted impact scores."""
     logger.info("[scheduler] Refreshing news feeds …")
-    # TODO: call into backend.services.news_service.refresh()
-    # Steps:
-    #   1. Fetch from all configured news sources
-    #   2. Deduplicate and NLP-score headlines
-    #   3. Update NewsItem table
-    #   4. Recompute weighted_impact for active universe
-    logger.info("[scheduler] News refresh complete.")
+    try:
+        from backend.modules.scanner import run_news_scan
+        count = await run_news_scan()
+        logger.info("[scheduler] News refresh complete: %d items", count)
+    except Exception:
+        logger.exception("[scheduler] News refresh failed")
 
 
 async def job_eod_grade() -> None:
     """16:00 IST - Grade the day's trades against actual close prices."""
     logger.info("[scheduler] Running EOD grading …")
-    # TODO: call into backend.modules.grader.run_eod_grade()
-    # Steps:
-    #   1. Fetch closing prices for all traded symbols
-    #   2. Mark open trades as closed with EOD square-off
-    #   3. Compute gross & net P&L for each trade
-    #   4. Persist results
-    logger.info("[scheduler] EOD grading complete.")
+    try:
+        from backend.modules.scanner import run_eod_grade
+        closed = await run_eod_grade()
+        logger.info("[scheduler] EOD grading complete: %d trades closed", closed)
+    except Exception:
+        logger.exception("[scheduler] EOD grading failed")
 
 
 async def job_learning_run() -> None:
     """16:30 IST - Self-learning: analyse today's trades and adjust weights."""
     logger.info("[scheduler] Running learning loop …")
-    # TODO: call into backend.modules.learner.run_daily_learning()
-    # Steps:
-    #   1. Load today's closed trades + feature contributions
-    #   2. Compute per-feature attribution vs outcome
-    #   3. Derive weight adjustments (bounded, small deltas)
-    #   4. Persist new weights + WeightsHistory record
-    #   5. Persist LearningRecord per trade
-    logger.info("[scheduler] Learning loop complete.")
+    try:
+        from backend.modules.scanner import DEFAULT_WEIGHTS
+        from backend.database import AsyncSessionLocal
+        from backend.models import WeightsHistory
+        import json
+        import datetime as dt
+
+        # For now, just save current weights as a snapshot
+        async with AsyncSessionLocal() as session:
+            wh = WeightsHistory(
+                timestamp=dt.datetime.now(dt.timezone.utc),
+                weights_json=json.dumps(DEFAULT_WEIGHTS),
+                trigger="eod_learning",
+                notes="Daily weights snapshot",
+            )
+            session.add(wh)
+            await session.commit()
+        logger.info("[scheduler] Learning loop complete (weights snapshot saved)")
+    except Exception:
+        logger.exception("[scheduler] Learning loop failed")
 
 
 async def job_eod_cleanup() -> None:
     """17:00 IST - End-of-day housekeeping."""
     logger.info("[scheduler] Running EOD cleanup …")
-    # TODO: call into backend.modules.maintenance.run_eod_cleanup()
-    # Steps:
-    #   1. Expire stale signals (status → expired)
-    #   2. Archive old news items beyond retention window
-    #   3. Vacuum / optimise SQLite if needed
-    #   4. Export daily summary to picks_history.jsonl
-    logger.info("[scheduler] EOD cleanup complete.")
+    try:
+        from backend.database import AsyncSessionLocal
+        from backend.models import Signal, NewsItem
+        from sqlalchemy import update, delete
+        import datetime as dt
+
+        async with AsyncSessionLocal() as session:
+            # Expire stale signals
+            await session.execute(
+                update(Signal)
+                .where(Signal.status == "pending")
+                .values(status="expired")
+            )
+            # Delete news older than 3 days
+            cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=3)
+            await session.execute(
+                delete(NewsItem).where(NewsItem.timestamp < cutoff)
+            )
+            await session.commit()
+        logger.info("[scheduler] EOD cleanup complete.")
+    except Exception:
+        logger.exception("[scheduler] EOD cleanup failed")
 
 
 # ─── Lifecycle ───────────────────────────────────────────────────────────
@@ -118,7 +141,6 @@ def _register_jobs(sched: AsyncIOScheduler) -> None:
     # Intraday scan every N minutes during market hours, Mon-Fri
     open_h, open_m = (int(x) for x in settings.market_open.split(":"))
     close_h, close_m = (int(x) for x in settings.market_close.split(":"))
-    # End scanning 15 min before close to avoid last-minute noise
     end_h, end_m = close_h, close_m - 15
     if end_m < 0:
         end_h -= 1
@@ -132,12 +154,12 @@ def _register_jobs(sched: AsyncIOScheduler) -> None:
             timezone=_TZ,
         ),
         id="market_hours_scan",
-        name=f"Intraday scan (every {settings.scan_interval_min}min, {settings.market_open}-{end_h:02d}:{end_m:02d} IST)",
+        name=f"Intraday scan (every {settings.scan_interval_min}min)",
         replace_existing=True,
         misfire_grace_time=120,
     )
 
-    # News refresh every N minutes, Mon-Fri 08:00-16:00
+    # News refresh every N minutes
     sched.add_job(
         job_news_refresh,
         IntervalTrigger(
@@ -192,10 +214,7 @@ def create_scheduler() -> AsyncIOScheduler:
 
 
 async def start_scheduler() -> AsyncIOScheduler:
-    """Create (if needed) and start the scheduler.
-
-    Safe to call multiple times -- will not double-start.
-    """
+    """Create (if needed) and start the scheduler."""
     global scheduler
     if scheduler is None:
         scheduler = create_scheduler()
