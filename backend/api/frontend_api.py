@@ -128,7 +128,7 @@ async def get_picks(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "data_as_of": dt.datetime.now(dt.timezone.utc).isoformat(),
         "trade_for": dt.datetime.now(dt.timezone.utc).strftime("%A %d %b %Y"),
-        "universe_size": 50,
+        "universe_size": 200,
         "scored": total_scored,
         "skipped": max(0, 50 - total_scored),
         "weights": weights,
