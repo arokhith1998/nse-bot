@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+
+# Environment
+.env
+*.env.local
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime data (keep examples in seed/)
+backend/data/*.json
+backend/data/*.jsonl
+!backend/data/.gitkeep
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Legacy runtime files (preserved in legacy/ folder)
+picks.json
+news.json
+weights.json
+journal.csv
+picks_history.jsonl
+.claude/

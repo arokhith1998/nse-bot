@@ -1,0 +1,177 @@
+{
+  "generated_at": "2026-04-10T18:30:00+05:30",
+  "period": {
+    "from": "2026-03-01",
+    "to": "2026-04-10",
+    "trading_days": 28,
+    "total_trades": 168
+  },
+  "overall": {
+    "win_rate": 58.3,
+    "avg_pnl_pct": 1.42,
+    "total_pnl": 8520.60,
+    "sharpe_ratio": 1.85,
+    "max_drawdown_pct": -4.8,
+    "profit_factor": 1.92,
+    "avg_win_pct": 3.65,
+    "avg_loss_pct": -1.72,
+    "avg_rr_achieved": 1.78,
+    "best_trade": {"symbol": "SUZLON", "pnl_pct": 8.45, "date": "2026-03-18"},
+    "worst_trade": {"symbol": "YESBANK", "pnl_pct": -4.12, "date": "2026-03-25"}
+  },
+  "by_setup_type": {
+    "BREAKOUT": {
+      "total_trades": 62,
+      "win_rate": 64.5,
+      "avg_pnl_pct": 2.15,
+      "avg_hold_time_min": 95,
+      "avg_rr_achieved": 2.05,
+      "profit_factor": 2.38,
+      "best_performing_symbols": ["HINDALCO", "JSWSTEEL", "TATASTEEL", "COALINDIA", "VEDL"],
+      "worst_performing_symbols": ["IDEA", "YESBANK", "SUZLON"],
+      "avg_entry_vs_zone_pct": 0.12,
+      "t1_hit_rate": 71.0,
+      "t2_hit_rate": 38.7,
+      "stopped_out_rate": 24.2,
+      "eod_exit_rate": 11.3,
+      "regime_performance": {
+        "TREND_UP": {"trades": 38, "win_rate": 73.7, "avg_pnl_pct": 2.85},
+        "RANGE_BOUND": {"trades": 15, "win_rate": 53.3, "avg_pnl_pct": 1.20},
+        "TREND_DOWN": {"trades": 9, "win_rate": 44.4, "avg_pnl_pct": -0.65}
+      }
+    },
+    "BREAKOUT/MOMENTUM": {
+      "total_trades": 45,
+      "win_rate": 62.2,
+      "avg_pnl_pct": 1.98,
+      "avg_hold_time_min": 82,
+      "avg_rr_achieved": 1.92,
+      "profit_factor": 2.10,
+      "best_performing_symbols": ["RELIANCE", "BAJFINANCE", "HDFCBANK", "M&M"],
+      "worst_performing_symbols": ["PNB", "BANKBARODA"],
+      "avg_entry_vs_zone_pct": 0.18,
+      "t1_hit_rate": 66.7,
+      "t2_hit_rate": 33.3,
+      "stopped_out_rate": 28.9,
+      "eod_exit_rate": 8.9,
+      "regime_performance": {
+        "TREND_UP": {"trades": 28, "win_rate": 71.4, "avg_pnl_pct": 2.60},
+        "RANGE_BOUND": {"trades": 12, "win_rate": 50.0, "avg_pnl_pct": 0.85},
+        "TREND_DOWN": {"trades": 5, "win_rate": 40.0, "avg_pnl_pct": -1.10}
+      }
+    },
+    "BREAKOUT/MOMENTUM/GAP-AND-GO": {
+      "total_trades": 28,
+      "win_rate": 67.9,
+      "avg_pnl_pct": 2.55,
+      "avg_hold_time_min": 68,
+      "avg_rr_achieved": 2.20,
+      "profit_factor": 2.75,
+      "best_performing_symbols": ["TATASTEEL", "HONASA", "SHADOWFAX", "RUBICON"],
+      "worst_performing_symbols": ["TAKE"],
+      "avg_entry_vs_zone_pct": 0.25,
+      "t1_hit_rate": 75.0,
+      "t2_hit_rate": 42.9,
+      "stopped_out_rate": 21.4,
+      "eod_exit_rate": 10.7,
+      "regime_performance": {
+        "TREND_UP": {"trades": 20, "win_rate": 75.0, "avg_pnl_pct": 3.10},
+        "RANGE_BOUND": {"trades": 6, "win_rate": 50.0, "avg_pnl_pct": 1.40},
+        "TREND_DOWN": {"trades": 2, "win_rate": 50.0, "avg_pnl_pct": 0.20}
+      }
+    },
+    "MOMENTUM": {
+      "total_trades": 20,
+      "win_rate": 50.0,
+      "avg_pnl_pct": 0.85,
+      "avg_hold_time_min": 110,
+      "avg_rr_achieved": 1.45,
+      "profit_factor": 1.52,
+      "best_performing_symbols": ["HAL", "BEL", "NIFTYBEES"],
+      "worst_performing_symbols": ["BHEL", "NHPC"],
+      "avg_entry_vs_zone_pct": 0.08,
+      "t1_hit_rate": 55.0,
+      "t2_hit_rate": 25.0,
+      "stopped_out_rate": 35.0,
+      "eod_exit_rate": 15.0,
+      "regime_performance": {
+        "TREND_UP": {"trades": 12, "win_rate": 58.3, "avg_pnl_pct": 1.50},
+        "RANGE_BOUND": {"trades": 5, "win_rate": 40.0, "avg_pnl_pct": -0.30},
+        "TREND_DOWN": {"trades": 3, "win_rate": 33.3, "avg_pnl_pct": -1.50}
+      }
+    },
+    "GAP-AND-GO": {
+      "total_trades": 8,
+      "win_rate": 62.5,
+      "avg_pnl_pct": 1.70,
+      "avg_hold_time_min": 55,
+      "avg_rr_achieved": 1.88,
+      "profit_factor": 2.05,
+      "best_performing_symbols": ["ANANDRATHI", "ICICIAMC"],
+      "worst_performing_symbols": ["GAEL"],
+      "avg_entry_vs_zone_pct": 0.30,
+      "t1_hit_rate": 62.5,
+      "t2_hit_rate": 37.5,
+      "stopped_out_rate": 25.0,
+      "eod_exit_rate": 12.5,
+      "regime_performance": {
+        "TREND_UP": {"trades": 6, "win_rate": 66.7, "avg_pnl_pct": 2.10},
+        "RANGE_BOUND": {"trades": 2, "win_rate": 50.0, "avg_pnl_pct": 0.50}
+      }
+    },
+    "SCALP": {
+      "total_trades": 5,
+      "win_rate": 40.0,
+      "avg_pnl_pct": -0.15,
+      "avg_hold_time_min": 25,
+      "avg_rr_achieved": 0.92,
+      "profit_factor": 0.88,
+      "best_performing_symbols": ["NIFTYBEES"],
+      "worst_performing_symbols": ["IRFC", "NHPC"],
+      "avg_entry_vs_zone_pct": 0.05,
+      "t1_hit_rate": 40.0,
+      "t2_hit_rate": 20.0,
+      "stopped_out_rate": 40.0,
+      "eod_exit_rate": 20.0,
+      "regime_performance": {
+        "TREND_UP": {"trades": 2, "win_rate": 50.0, "avg_pnl_pct": 0.30},
+        "RANGE_BOUND": {"trades": 3, "win_rate": 33.3, "avg_pnl_pct": -0.45}
+      }
+    }
+  },
+  "by_sector": {
+    "METALS": {"trades": 42, "win_rate": 66.7, "avg_pnl_pct": 2.40, "top_symbol": "HINDALCO"},
+    "DEFENCE": {"trades": 18, "win_rate": 55.6, "avg_pnl_pct": 1.55, "top_symbol": "HAL"},
+    "NBFC": {"trades": 15, "win_rate": 60.0, "avg_pnl_pct": 1.80, "top_symbol": "BAJFINANCE"},
+    "BANKING": {"trades": 22, "win_rate": 54.5, "avg_pnl_pct": 1.10, "top_symbol": "HDFCBANK"},
+    "IT": {"trades": 12, "win_rate": 50.0, "avg_pnl_pct": 0.75, "top_symbol": "INFY"},
+    "ENERGY": {"trades": 14, "win_rate": 57.1, "avg_pnl_pct": 1.30, "top_symbol": "RELIANCE"},
+    "FMCG": {"trades": 8, "win_rate": 62.5, "avg_pnl_pct": 1.65, "top_symbol": "HONASA"},
+    "INFRA": {"trades": 10, "win_rate": 50.0, "avg_pnl_pct": 0.90, "top_symbol": "LT"},
+    "INDEX_ETF": {"trades": 6, "win_rate": 50.0, "avg_pnl_pct": 0.45, "top_symbol": "NIFTYBEES"},
+    "PSU": {"trades": 21, "win_rate": 47.6, "avg_pnl_pct": 0.60, "top_symbol": "IRCTC"}
+  },
+  "by_day_of_week": {
+    "Monday": {"trades": 32, "win_rate": 56.3, "avg_pnl_pct": 1.25},
+    "Tuesday": {"trades": 35, "win_rate": 60.0, "avg_pnl_pct": 1.55},
+    "Wednesday": {"trades": 34, "win_rate": 58.8, "avg_pnl_pct": 1.40},
+    "Thursday": {"trades": 36, "win_rate": 61.1, "avg_pnl_pct": 1.70},
+    "Friday": {"trades": 31, "win_rate": 54.8, "avg_pnl_pct": 1.05}
+  },
+  "by_entry_time_bucket": {
+    "09:15-09:45": {"trades": 52, "win_rate": 63.5, "avg_pnl_pct": 2.10, "notes": "Opening range breakouts perform best"},
+    "09:45-10:30": {"trades": 38, "win_rate": 57.9, "avg_pnl_pct": 1.45},
+    "10:30-12:00": {"trades": 30, "win_rate": 56.7, "avg_pnl_pct": 1.20},
+    "12:00-13:30": {"trades": 22, "win_rate": 50.0, "avg_pnl_pct": 0.55, "notes": "Lunch hour chop - avoid"},
+    "13:30-14:30": {"trades": 18, "win_rate": 55.6, "avg_pnl_pct": 1.15},
+    "14:30-15:15": {"trades": 8, "win_rate": 62.5, "avg_pnl_pct": 1.60, "notes": "Late-day momentum works but small sample"}
+  },
+  "insights": [
+    "BREAKOUT/MOMENTUM/GAP-AND-GO is the highest win-rate setup at 67.9% -- prioritize when regime is TREND_UP",
+    "SCALP setups are net negative after costs -- consider removing from active rotation",
+    "METALS sector outperforms all others with 66.7% win rate during this period (MIP catalyst)",
+    "Trades entered 09:15-09:45 have 63.5% win rate vs 50.0% for 12:00-13:30 -- avoid midday entries",
+    "Thursday is the strongest day (61.1% win rate) while Friday is weakest (54.8%)",
+    "News-catalysed picks average 2.80% vs 1.05% for non-news picks -- news weight should increase"
+  ]
+}

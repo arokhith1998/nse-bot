@@ -1,0 +1,142 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import RegimePanel from "@/components/RegimePanel";
+import PicksTable from "@/components/PicksTable";
+import TradeCard from "@/components/TradeCard";
+import NewsPanel from "@/components/NewsPanel";
+import RiskGauge from "@/components/RiskGauge";
+import GrowwCalculator from "@/components/GrowwCalculator";
+import { useRegime } from "@/hooks/useRegime";
+import { usePicks } from "@/hooks/usePicks";
+import { useTrades } from "@/hooks/useTrades";
+import { fetchNews, fetchPortfolioRisk } from "@/lib/api";
+import type { NewsItem, PortfolioRisk, FeatureWeight } from "@/lib/types";
+import { RefreshCw } from "lucide-react";
+import { formatIST } from "@/lib/constants";
+
+export default function DashboardPage() {
+  const { regime, loading: regimeLoading } = useRegime();
+  const {
+    picks,
+    loading: picksLoading,
+    refresh: refreshPicks,
+    lastUpdated,
+  } = usePicks();
+  const { trades, loading: tradesLoading } = useTrades();
+
+  const [news, setNews] = useState<NewsItem[]>([]);
+  const [newsLoading, setNewsLoading] = useState(true);
+  const [risk, setRisk] = useState<PortfolioRisk | null>(null);
+  const [riskLoading, setRiskLoading] = useState(true);
+
+  useEffect(() => {
+    fetchNews()
+      .then((data) => setNews(data.items))
+      .catch(() => setNews([]))
+      .finally(() => setNewsLoading(false));
+
+    fetchPortfolioRisk()
+      .then(setRisk)
+      .catch(() => setRisk(null))
+      .finally(() => setRiskLoading(false));
+  }, []);
+
+  const featureWeights: FeatureWeight[] = picks?.weights
+    ? Object.entries(picks.weights).map(([name, weight]) => ({ name, weight }))
+    : [];
+
+  return (
+    <>
+      {/* Top info bar */}
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-mute">
+          {picks && (
+            <span>
+              Universe: {picks.universe_size.toLocaleString()} | Scored:{" "}
+              {picks.scored.toLocaleString()} | Trade for: {picks.trade_for}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {lastUpdated && (
+            <span className="text-[10px] text-mute/60">
+              Updated {formatIST(lastUpdated)}
+            </span>
+          )}
+          <button
+            onClick={refreshPicks}
+            disabled={picksLoading}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-card-alt border border-line rounded-lg text-mute hover:text-ink hover:border-accent/30 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw
+              className={`w-3 h-3 ${picksLoading ? "animate-spin" : ""}`}
+            />
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Regime Panel */}
+      <RegimePanel regime={regime} loading={regimeLoading} />
+
+      {/* Picks Table */}
+      <PicksTable
+        topPicks={picks?.top_picks ?? []}
+        stretchPicks={picks?.stretch_picks ?? []}
+        weights={picks?.weights}
+      />
+
+      {/* Main Grid: Trades + News | Risk */}
+      <div className="grid grid-cols-12 gap-5">
+        <div className="col-span-12 lg:col-span-8 space-y-5">
+          {/* Active Trades */}
+          <div>
+            <h2 className="text-xs font-semibold text-mute uppercase tracking-wider mb-3">
+              Active Trades ({trades.length})
+            </h2>
+            {tradesLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {Array.from({ length: 2 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-40 bg-card border border-line rounded-xl animate-pulse"
+                  />
+                ))}
+              </div>
+            ) : trades.length === 0 ? (
+              <div className="bg-card border border-line rounded-xl p-8 text-center">
+                <p className="text-sm text-mute">No active trades</p>
+                <p className="text-xs text-mute/50 mt-1">
+                  Trades will appear here when positions are opened
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {trades.map((trade) => (
+                  <TradeCard key={trade.id} trade={trade} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* News */}
+          <NewsPanel news={news} loading={newsLoading} />
+        </div>
+
+        {/* Risk Gauge + Calculator */}
+        <div className="col-span-12 lg:col-span-4 space-y-5">
+          <RiskGauge risk={risk} loading={riskLoading} />
+          <GrowwCalculator />
+        </div>
+      </div>
+
+      {/* Disclaimer */}
+      <div className="bg-red/5 border border-red/20 rounded-xl p-4 text-xs text-red/80 leading-relaxed">
+        <strong>PAPER TRADING ONLY -- NOT INVESTMENT ADVICE.</strong>{" "}
+        {picks?.disclaimer ??
+          "These picks are educational, generated by a rule-based scoring system. SEBI 2023: ~70% of retail intraday traders lose money."}
+      </div>
+    </>
+  );
+}

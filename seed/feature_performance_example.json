@@ -1,0 +1,218 @@
+{
+  "generated_at": "2026-04-10T18:30:00+05:30",
+  "description": "Feature importance and weight evolution over time. Tracks how each scoring component correlates with winning trades and how the adaptive weight system responds.",
+  "current_weights": {
+    "trend": 0.2493,
+    "momentum": 0.1994,
+    "volume": 0.1496,
+    "breakout": 0.1496,
+    "volatility": 0.1007,
+    "liquidity": 0.0508,
+    "news": 0.1007
+  },
+  "default_weights": {
+    "trend": 0.20,
+    "momentum": 0.18,
+    "volume": 0.12,
+    "breakout": 0.13,
+    "volatility": 0.08,
+    "liquidity": 0.04,
+    "news": 0.10,
+    "stoch": 0.05,
+    "bbands": 0.05,
+    "gap": 0.03,
+    "sentiment": 0.02
+  },
+  "weight_history": [
+    {
+      "date": "2026-03-01",
+      "weights": {"trend": 0.20, "momentum": 0.18, "volume": 0.12, "breakout": 0.13, "volatility": 0.08, "liquidity": 0.04, "news": 0.10},
+      "trigger": "INITIAL_DEFAULTS",
+      "win_rate_at_time": null
+    },
+    {
+      "date": "2026-03-07",
+      "weights": {"trend": 0.2050, "momentum": 0.1850, "volume": 0.1200, "breakout": 0.1300, "volatility": 0.0800, "liquidity": 0.0400, "news": 0.1050},
+      "trigger": "NEWS_OUTPERFORMED",
+      "win_rate_at_time": 61.5
+    },
+    {
+      "date": "2026-03-14",
+      "weights": {"trend": 0.2100, "momentum": 0.1900, "volume": 0.1200, "breakout": 0.1300, "volatility": 0.0800, "liquidity": 0.0400, "news": 0.1100},
+      "trigger": "WIN_RATE_ABOVE_55",
+      "win_rate_at_time": 59.2
+    },
+    {
+      "date": "2026-03-21",
+      "weights": {"trend": 0.2200, "momentum": 0.1950, "volume": 0.1350, "breakout": 0.1400, "volatility": 0.0850, "liquidity": 0.0450, "news": 0.1050},
+      "trigger": "WIN_RATE_ABOVE_55",
+      "win_rate_at_time": 57.8
+    },
+    {
+      "date": "2026-03-28",
+      "weights": {"trend": 0.2350, "momentum": 0.1950, "volume": 0.1400, "breakout": 0.1450, "volatility": 0.0900, "liquidity": 0.0500, "news": 0.0950},
+      "trigger": "NEWS_UNDERPERFORMED",
+      "win_rate_at_time": 55.4
+    },
+    {
+      "date": "2026-04-04",
+      "weights": {"trend": 0.2450, "momentum": 0.1980, "volume": 0.1480, "breakout": 0.1480, "volatility": 0.0980, "liquidity": 0.0500, "news": 0.0980},
+      "trigger": "WIN_RATE_ABOVE_55",
+      "win_rate_at_time": 58.3
+    },
+    {
+      "date": "2026-04-10",
+      "weights": {"trend": 0.2493, "momentum": 0.1994, "volume": 0.1496, "breakout": 0.1496, "volatility": 0.1007, "liquidity": 0.0508, "news": 0.1007},
+      "trigger": "NEWS_OUTPERFORMED",
+      "win_rate_at_time": 58.3
+    }
+  ],
+  "feature_correlation_with_wins": {
+    "period": "2026-03-01 to 2026-04-10",
+    "sample_size": 168,
+    "features": {
+      "trend": {
+        "correlation_with_win": 0.42,
+        "avg_score_in_wins": 92.5,
+        "avg_score_in_losses": 68.3,
+        "information_value": 0.38,
+        "rank": 1,
+        "interpretation": "Strong predictor. Trend alignment is the most reliable signal -- price above 20 EMA and 50 EMA strongly predicts positive outcomes."
+      },
+      "momentum": {
+        "correlation_with_win": 0.35,
+        "avg_score_in_wins": 81.2,
+        "avg_score_in_losses": 62.8,
+        "information_value": 0.30,
+        "rank": 2,
+        "interpretation": "Good predictor. 5-day and 20-day return momentum separates winners from losers reliably."
+      },
+      "breakout": {
+        "correlation_with_win": 0.31,
+        "avg_score_in_wins": 88.0,
+        "avg_score_in_losses": 65.5,
+        "information_value": 0.28,
+        "rank": 3,
+        "interpretation": "Good predictor. Near-20-day-high stocks have higher win rates, especially in TREND_UP regime."
+      },
+      "volume": {
+        "correlation_with_win": 0.28,
+        "avg_score_in_wins": 72.4,
+        "avg_score_in_losses": 58.1,
+        "information_value": 0.22,
+        "rank": 4,
+        "interpretation": "Moderate predictor. Volume confirmation matters but has diminishing returns above 2x average."
+      },
+      "news": {
+        "correlation_with_win": 0.25,
+        "avg_score_in_wins": 45.0,
+        "avg_score_in_losses": 28.0,
+        "information_value": 0.20,
+        "rank": 5,
+        "interpretation": "Moderate predictor. News catalyst is binary (100 or 0) but when present, boosts win probability significantly."
+      },
+      "volatility": {
+        "correlation_with_win": 0.18,
+        "avg_score_in_wins": 82.0,
+        "avg_score_in_losses": 70.5,
+        "information_value": 0.14,
+        "rank": 6,
+        "interpretation": "Weak predictor. ATR sweet spot (0.8%-4.5%) filters out bad candidates but does not strongly differentiate among remaining ones."
+      },
+      "gap": {
+        "correlation_with_win": 0.22,
+        "avg_score_in_wins": 78.5,
+        "avg_score_in_losses": 55.0,
+        "information_value": 0.18,
+        "rank": 7,
+        "interpretation": "Moderate predictor. Gap-up 0.5%-3% is a strong signal when combined with volume. Standalone predictive power is limited."
+      },
+      "stoch": {
+        "correlation_with_win": 0.12,
+        "avg_score_in_wins": 55.0,
+        "avg_score_in_losses": 48.0,
+        "information_value": 0.08,
+        "rank": 8,
+        "interpretation": "Weak predictor. Stochastic oscillator adds marginal value. Overbought readings (>80) are not reliably bearish for momentum stocks."
+      },
+      "bbands": {
+        "correlation_with_win": 0.15,
+        "avg_score_in_wins": 72.0,
+        "avg_score_in_losses": 60.0,
+        "information_value": 0.10,
+        "rank": 9,
+        "interpretation": "Weak predictor. Bollinger band position is somewhat useful for filtering extremes but not for ranking."
+      },
+      "sentiment": {
+        "correlation_with_win": 0.10,
+        "avg_score_in_wins": 58.0,
+        "avg_score_in_losses": 52.0,
+        "information_value": 0.06,
+        "rank": 10,
+        "interpretation": "Very weak predictor. Sentiment scoring from news headlines is noisy. Consider improving NLP model or weighting down."
+      },
+      "liquidity": {
+        "correlation_with_win": 0.08,
+        "avg_score_in_wins": 80.0,
+        "avg_score_in_losses": 76.0,
+        "information_value": 0.04,
+        "rank": 11,
+        "interpretation": "Very weak predictor. Liquidity acts as a filter (minimum volume threshold) rather than a predictor -- most scored stocks pass the threshold."
+      }
+    }
+  },
+  "feature_interaction_effects": [
+    {
+      "combination": ["trend", "breakout", "volume"],
+      "description": "Trend-aligned breakout with volume confirmation",
+      "trades": 38,
+      "win_rate": 76.3,
+      "avg_pnl_pct": 3.10,
+      "notes": "Highest win-rate combination. All three scores > 80 is the ideal setup."
+    },
+    {
+      "combination": ["breakout", "gap", "news"],
+      "description": "Gap-up breakout with news catalyst",
+      "trades": 18,
+      "win_rate": 72.2,
+      "avg_pnl_pct": 2.85,
+      "notes": "Strong combination but smaller sample size. Most effective in TREND_UP regime."
+    },
+    {
+      "combination": ["momentum", "volume"],
+      "description": "Momentum with volume surge (no breakout)",
+      "trades": 22,
+      "win_rate": 54.5,
+      "avg_pnl_pct": 1.10,
+      "notes": "Momentum without breakout confirmation is mediocre. Consider requiring breakout > 60."
+    },
+    {
+      "combination": ["breakout"],
+      "description": "Breakout alone (no momentum or volume confirmation)",
+      "trades": 12,
+      "win_rate": 41.7,
+      "avg_pnl_pct": -0.30,
+      "notes": "False breakouts are common without volume/momentum. Never trade breakout in isolation."
+    }
+  ],
+  "recommended_weight_adjustments": [
+    {
+      "feature": "trend",
+      "current_weight": 0.2493,
+      "recommended_weight": 0.26,
+      "reason": "Highest correlation with wins (0.42). Consistent outperformance across all regimes."
+    },
+    {
+      "feature": "sentiment",
+      "current_weight": 0.02,
+      "recommended_weight": 0.01,
+      "reason": "Lowest information value (0.06). NLP-derived sentiment adds noise. Reduce until model improves."
+    },
+    {
+      "feature": "gap",
+      "current_weight": 0.03,
+      "recommended_weight": 0.05,
+      "reason": "Moderate correlation (0.22) but underweighted relative to predictive power in GAP-AND-GO setups."
+    }
+  ]
+}
