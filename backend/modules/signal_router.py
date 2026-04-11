@@ -167,22 +167,19 @@ def _classify_setup(score_breakdown: Dict[str, float]) -> str:
     """Heuristically pick the best SetupType label from sub-scores."""
     brk = score_breakdown.get("breakout", 0)
     mom = score_breakdown.get("momentum", 0)
-    gap = score_breakdown.get("gap", 0)
     trend = score_breakdown.get("trend", 0)
-    bb = score_breakdown.get("bbands", 0)
+    vol = score_breakdown.get("volume", 0)
 
     if brk >= 80:
         return SetupType.BREAKOUT.value
     if mom >= 75 and brk >= 50:
         return SetupType.MOMENTUM.value
-    if gap >= 70:
+    if brk >= 60 and vol >= 70:
         return SetupType.GAP_AND_GO.value
-    if bb <= 35 and trend >= 60:
+    if trend >= 60 and mom < 40:
         return SetupType.PULLBACK.value
     if trend < 30 and mom >= 60:
         return SetupType.REVERSAL.value
-    # TODO: VWAP_RECLAIM detection requires intraday VWAP data from
-    #       intraday_stream module (not yet wired).
     return SetupType.SWING.value
 
 

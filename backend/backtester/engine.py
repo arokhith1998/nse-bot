@@ -27,11 +27,14 @@ from backend.services.cost_model import (
     groww_intraday_cost,
     zerodha_intraday_cost,
     CostBreakdown,
+    estimate_slippage,
+    total_execution_cost,
 )
 from backend.modules.signal_router import SignalRouter, SetupType, RegimeLabel
 from backend.backtester.data_loader import (
     load_nifty50_symbols,
     load_nifty200_symbols,
+    load_full_nse_universe,
     load_benchmark,
     preload_universe,
     NIFTY50_SYMBOLS,
@@ -42,17 +45,12 @@ logger = logging.getLogger(__name__)
 
 # Default scoring weights (mirrors weights.json defaults)
 _DEFAULT_WEIGHTS: Dict[str, float] = {
-    "trend": 0.15,
-    "momentum": 0.15,
-    "volume": 0.10,
+    "trend": 0.25,
+    "momentum": 0.20,
+    "volume": 0.15,
     "breakout": 0.15,
     "volatility": 0.10,
-    "liquidity": 0.05,
-    "news": 0.05,
-    "stoch": 0.05,
-    "bbands": 0.05,
-    "gap": 0.10,
-    "sentiment": 0.05,
+    "news": 0.15,
 }
 
 # Risk-free rate for Sharpe / Sortino (annualised, India 10Y benchmark)
@@ -73,7 +71,7 @@ class BacktestConfig:
     capital: float = 100_000.0
     risk_per_trade_pct: float = 1.0
     max_open_positions: int = 6
-    slippage_pct: float = 0.05              # 0.05% adverse slippage on entry
+    slippage_pct: float = 0.05              # legacy; entry slippage now uses dynamic estimate_slippage()
     cost_model: str = "groww"               # "groww" | "zerodha"
     top_n: int = 6                          # max picks per day
     use_regime_filter: bool = True
@@ -341,12 +339,7 @@ def _compute_score_breakdown(
         "volume": round(vol_score, 2),
         "breakout": round(breakout_score, 2),
         "volatility": round(vol_score_bb, 2),
-        "liquidity": round(liq_score, 2),
         "news": 0.0,       # no news data in backtest
-        "stoch": round(stoch_score, 2),
-        "bbands": round(bb_score, 2),
-        "gap": round(gap_score, 2),
-        "sentiment": 50.0,  # neutral default
     }
 
     return breakdown, atr_val, last_close
@@ -530,7 +523,7 @@ class BacktestEngine:
             if lower == "nifty200":
                 return load_nifty200_symbols()
             if lower == "full":
-                return load_nifty200_symbols()
+                return load_full_nse_universe()
             # Treat as comma-separated
             return [s.strip().upper() for s in sym_spec.split(",") if s.strip()]
         return []
@@ -725,10 +718,16 @@ class BacktestEngine:
             if open_price <= 0:
                 continue
 
-            # Apply slippage (adverse = buy higher)
-            entry_price = round(open_price * (1 + cfg.slippage_pct / 100), 2)
+            # Compute average daily volume for dynamic slippage
+            lookback_vol = df.iloc[max(0, idx - 19) : idx + 1]
+            avg_daily_volume = float(lookback_vol["Volume"].mean()) if len(lookback_vol) > 0 else 0.0
 
             qty = sig["qty"]
+
+            # Apply dynamic slippage (adverse = buy higher)
+            slip_pct = estimate_slippage(open_price, qty, avg_daily_volume)
+            entry_price = round(open_price * (1 + slip_pct / 100), 2)
+
             capital_needed = entry_price * qty
             if capital_needed > self._cash:
                 qty = max(1, int(self._cash / entry_price))
@@ -774,6 +773,7 @@ class BacktestEngine:
                 "t1_hit": False,
                 "peak_price": entry_price,
                 "trough_price": entry_price,
+                "avg_daily_volume": avg_daily_volume,
             })
 
     # ------------------------------------------------------------------
@@ -817,6 +817,7 @@ class BacktestEngine:
             t1 = pos["target1"]
             t2 = pos["target2"]
             qty = pos["remaining_qty"]
+            adv = pos.get("avg_daily_volume", 0.0)
 
             # Track excursions
             pos["peak_price"] = max(pos["peak_price"], bar_high)
@@ -832,9 +833,9 @@ class BacktestEngine:
             # 1. Stop loss check
             if bar_low <= stop:
                 exit_price = stop
-                cost_bd = self._cost_fn(price=(entry_price + exit_price) / 2, qty=qty)
+                exec_cost = total_execution_cost((entry_price + exit_price) / 2, qty, adv, self._cost_fn)
                 gross_pnl = (exit_price - entry_price) * qty
-                net_pnl = gross_pnl - cost_bd.total
+                net_pnl = gross_pnl - exec_cost
 
                 self._trades.append(BacktestTrade(
                     symbol=sym,
@@ -847,7 +848,7 @@ class BacktestEngine:
                     regime_at_entry=pos["regime_at_entry"],
                     gross_pnl=round(gross_pnl, 2),
                     net_pnl=round(net_pnl, 2),
-                    cost=round(cost_bd.total, 2),
+                    cost=round(exec_cost, 2),
                     pnl_pct=round((exit_price / entry_price - 1) * 100, 4),
                     exit_reason="stop_loss",
                     holding_days=hold_days,
@@ -864,9 +865,9 @@ class BacktestEngine:
             # 2. Target 2 check (full exit)
             if bar_high >= t2:
                 exit_price = t2
-                cost_bd = self._cost_fn(price=(entry_price + exit_price) / 2, qty=qty)
+                exec_cost = total_execution_cost((entry_price + exit_price) / 2, qty, adv, self._cost_fn)
                 gross_pnl = (exit_price - entry_price) * qty
-                net_pnl = gross_pnl - cost_bd.total
+                net_pnl = gross_pnl - exec_cost
 
                 self._trades.append(BacktestTrade(
                     symbol=sym,
@@ -879,7 +880,7 @@ class BacktestEngine:
                     regime_at_entry=pos["regime_at_entry"],
                     gross_pnl=round(gross_pnl, 2),
                     net_pnl=round(net_pnl, 2),
-                    cost=round(cost_bd.total, 2),
+                    cost=round(exec_cost, 2),
                     pnl_pct=round((exit_price / entry_price - 1) * 100, 4),
                     exit_reason="target2",
                     holding_days=hold_days,
@@ -898,9 +899,9 @@ class BacktestEngine:
                 partial_qty = qty // 2
                 if partial_qty > 0:
                     exit_price = t1
-                    cost_bd = self._cost_fn(price=(entry_price + exit_price) / 2, qty=partial_qty)
+                    exec_cost = total_execution_cost((entry_price + exit_price) / 2, partial_qty, adv, self._cost_fn)
                     gross_pnl = (exit_price - entry_price) * partial_qty
-                    net_pnl = gross_pnl - cost_bd.total
+                    net_pnl = gross_pnl - exec_cost
 
                     self._trades.append(BacktestTrade(
                         symbol=sym,
@@ -913,7 +914,7 @@ class BacktestEngine:
                         regime_at_entry=pos["regime_at_entry"],
                         gross_pnl=round(gross_pnl, 2),
                         net_pnl=round(net_pnl, 2),
-                        cost=round(cost_bd.total, 2),
+                        cost=round(exec_cost, 2),
                         pnl_pct=round((exit_price / entry_price - 1) * 100, 4),
                         exit_reason="target1",
                         holding_days=hold_days,
@@ -933,9 +934,9 @@ class BacktestEngine:
             remaining = pos["remaining_qty"]
             if remaining > 0:
                 exit_price = bar_close
-                cost_bd = self._cost_fn(price=(entry_price + exit_price) / 2, qty=remaining)
+                exec_cost = total_execution_cost((entry_price + exit_price) / 2, remaining, adv, self._cost_fn)
                 gross_pnl = (exit_price - entry_price) * remaining
-                net_pnl = gross_pnl - cost_bd.total
+                net_pnl = gross_pnl - exec_cost
 
                 reason = "eod_close"
                 if pos["t1_hit"]:
@@ -952,7 +953,7 @@ class BacktestEngine:
                     regime_at_entry=pos["regime_at_entry"],
                     gross_pnl=round(gross_pnl, 2),
                     net_pnl=round(net_pnl, 2),
-                    cost=round(cost_bd.total, 2),
+                    cost=round(exec_cost, 2),
                     pnl_pct=round((exit_price / entry_price - 1) * 100, 4),
                     exit_reason=reason,
                     holding_days=hold_days,
@@ -995,9 +996,10 @@ class BacktestEngine:
             mae_pct = (entry_price - pos["trough_price"]) / max(entry_price, 1) * 100
             mfe_pct = (pos["peak_price"] - entry_price) / max(entry_price, 1) * 100
 
-            cost_bd = self._cost_fn(price=(entry_price + exit_price) / 2, qty=qty)
+            adv = pos.get("avg_daily_volume", 0.0)
+            exec_cost = total_execution_cost((entry_price + exit_price) / 2, qty, adv, self._cost_fn)
             gross_pnl = (exit_price - entry_price) * qty
-            net_pnl = gross_pnl - cost_bd.total
+            net_pnl = gross_pnl - exec_cost
 
             self._trades.append(BacktestTrade(
                 symbol=sym,
@@ -1010,7 +1012,7 @@ class BacktestEngine:
                 regime_at_entry=pos["regime_at_entry"],
                 gross_pnl=round(gross_pnl, 2),
                 net_pnl=round(net_pnl, 2),
-                cost=round(cost_bd.total, 2),
+                cost=round(exec_cost, 2),
                 pnl_pct=round((exit_price / entry_price - 1) * 100, 4),
                 exit_reason="eod_close",
                 holding_days=hold_days,
@@ -1236,3 +1238,302 @@ class BacktestEngine:
         result.worst_trades = sorted_by_pnl[-5:][::-1]  # worst first
 
         return result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Walk-Forward Backtesting
+# ═══════════════════════════════════════════════════════════════════════
+
+@dataclass
+class WalkForwardFold:
+    """Metrics for a single walk-forward fold."""
+
+    fold_number: int
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
+    trained_weights: Dict[str, float]
+    total_trades: int = 0
+    winners: int = 0
+    win_rate_pct: float = 0.0
+    total_pnl: float = 0.0
+    total_pnl_pct: float = 0.0
+    sharpe_ratio: float = 0.0
+    max_drawdown_pct: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+@dataclass
+class WalkForwardResult:
+    """Aggregate walk-forward backtest results."""
+
+    folds: List[WalkForwardFold] = field(default_factory=list)
+    aggregate_trades: int = 0
+    aggregate_winners: int = 0
+    aggregate_win_rate_pct: float = 0.0
+    aggregate_pnl: float = 0.0
+    aggregate_pnl_pct: float = 0.0
+    aggregate_sharpe: float = 0.0
+    aggregate_max_drawdown_pct: float = 0.0
+    single_pass_sharpe: float = 0.0  # for comparison
+    config: Optional[BacktestConfig] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "folds": [f.to_dict() for f in self.folds],
+            "aggregate_trades": self.aggregate_trades,
+            "aggregate_winners": self.aggregate_winners,
+            "aggregate_win_rate_pct": self.aggregate_win_rate_pct,
+            "aggregate_pnl": self.aggregate_pnl,
+            "aggregate_pnl_pct": self.aggregate_pnl_pct,
+            "aggregate_sharpe": self.aggregate_sharpe,
+            "aggregate_max_drawdown_pct": self.aggregate_max_drawdown_pct,
+            "single_pass_sharpe": self.single_pass_sharpe,
+        }
+
+
+def walk_forward_backtest(
+    config: BacktestConfig,
+    train_months: int = 3,
+    test_months: int = 1,
+    on_progress: Optional[Any] = None,
+) -> WalkForwardResult:
+    """Run a walk-forward backtest with expanding/rolling training windows.
+
+    Splits the date range into folds. For each fold:
+    1. Train: run backtest on prior period, extract per-feature win rates
+       to derive weights.
+    2. Test: run backtest on current fold using trained weights.
+    3. Record per-fold metrics.
+
+    Parameters
+    ----------
+    config : BacktestConfig
+        Base config (symbols, capital, etc). Dates define the overall range.
+    train_months : int
+        Length of each training window in months.
+    test_months : int
+        Length of each test window in months.
+    on_progress : callable, optional
+        Progress callback(pct, msg).
+
+    Returns
+    -------
+    WalkForwardResult
+    """
+    from dateutil.relativedelta import relativedelta
+
+    start = config.start_date
+    end = config.end_date
+
+    # Build fold boundaries
+    folds: List[Tuple[date, date, date, date]] = []  # (train_start, train_end, test_start, test_end)
+    test_start = start + relativedelta(months=train_months)
+
+    while test_start < end:
+        train_start = test_start - relativedelta(months=train_months)
+        test_end = min(test_start + relativedelta(months=test_months) - timedelta(days=1), end)
+
+        if test_end <= test_start:
+            break
+
+        folds.append((train_start, test_start - timedelta(days=1), test_start, test_end))
+        test_start = test_end + timedelta(days=1)
+
+    if not folds:
+        logger.warning("Date range too short for walk-forward with train=%d, test=%d months",
+                       train_months, test_months)
+        return WalkForwardResult(config=config)
+
+    logger.info("Walk-forward: %d folds, train=%d months, test=%d months",
+                len(folds), train_months, test_months)
+
+    wf_result = WalkForwardResult(config=config)
+    all_test_trades: List[BacktestTrade] = []
+    all_test_equity: List[DailyEquity] = []
+
+    for fold_idx, (tr_start, tr_end, ts_start, ts_end) in enumerate(folds):
+        if on_progress:
+            pct = int(fold_idx / len(folds) * 100)
+            on_progress(pct, f"Fold {fold_idx + 1}/{len(folds)}: training")
+
+        # --- Training pass: run backtest to learn weights ---
+        train_config = BacktestConfig(
+            symbols=config.symbols,
+            start_date=tr_start,
+            end_date=tr_end,
+            capital=config.capital,
+            risk_per_trade_pct=config.risk_per_trade_pct,
+            max_open_positions=config.max_open_positions,
+            cost_model=config.cost_model,
+            top_n=config.top_n,
+            use_regime_filter=config.use_regime_filter,
+            benchmark=config.benchmark,
+            weights=config.weights,
+        )
+        train_engine = BacktestEngine(train_config)
+        train_result = train_engine.run()
+
+        # Derive weights from training trades
+        trained_weights = _derive_weights_from_trades(
+            train_result.trades,
+            config.weights or dict(_DEFAULT_WEIGHTS),
+        )
+
+        logger.info(
+            "Fold %d/%d: train %s->%s (%d trades), test %s->%s, weights=%s",
+            fold_idx + 1, len(folds), tr_start, tr_end,
+            len(train_result.trades), ts_start, ts_end,
+            {k: round(v, 3) for k, v in trained_weights.items()},
+        )
+
+        # --- Test pass: run backtest with trained weights ---
+        if on_progress:
+            on_progress(
+                int((fold_idx + 0.5) / len(folds) * 100),
+                f"Fold {fold_idx + 1}/{len(folds)}: testing",
+            )
+
+        test_config = BacktestConfig(
+            symbols=config.symbols,
+            start_date=ts_start,
+            end_date=ts_end,
+            capital=config.capital,
+            risk_per_trade_pct=config.risk_per_trade_pct,
+            max_open_positions=config.max_open_positions,
+            cost_model=config.cost_model,
+            top_n=config.top_n,
+            use_regime_filter=config.use_regime_filter,
+            benchmark=config.benchmark,
+            weights=trained_weights,
+        )
+        test_engine = BacktestEngine(test_config)
+        test_result = test_engine.run()
+
+        # Record fold metrics
+        s = test_result.summary
+        fold = WalkForwardFold(
+            fold_number=fold_idx + 1,
+            train_start=tr_start.isoformat(),
+            train_end=tr_end.isoformat(),
+            test_start=ts_start.isoformat(),
+            test_end=ts_end.isoformat(),
+            trained_weights=trained_weights,
+            total_trades=s.total_trades,
+            winners=s.winners,
+            win_rate_pct=s.win_rate_pct,
+            total_pnl=s.total_pnl,
+            total_pnl_pct=s.total_pnl_pct,
+            sharpe_ratio=s.sharpe_ratio,
+            max_drawdown_pct=s.max_drawdown_pct,
+        )
+        wf_result.folds.append(fold)
+        all_test_trades.extend(test_result.trades)
+        all_test_equity.extend(test_result.daily_equity)
+
+    # --- Aggregate metrics across all test folds ---
+    wf_result.aggregate_trades = len(all_test_trades)
+    winners = [t for t in all_test_trades if t.net_pnl > 0]
+    wf_result.aggregate_winners = len(winners)
+    wf_result.aggregate_win_rate_pct = round(
+        len(winners) / max(len(all_test_trades), 1) * 100, 2,
+    )
+    wf_result.aggregate_pnl = round(sum(t.net_pnl for t in all_test_trades), 2)
+    wf_result.aggregate_pnl_pct = round(
+        wf_result.aggregate_pnl / max(config.capital, 1) * 100, 4,
+    )
+
+    # Aggregate Sharpe from combined equity curve
+    if len(all_test_equity) > 1:
+        eq_vals = [e.equity_value for e in all_test_equity]
+        daily_rets = []
+        for i in range(1, len(eq_vals)):
+            if eq_vals[i - 1] > 0:
+                daily_rets.append(eq_vals[i] / eq_vals[i - 1] - 1)
+        if daily_rets:
+            daily_rf = _RISK_FREE_ANNUAL / 252
+            excess = [r - daily_rf for r in daily_rets]
+            std_ret = np.std(daily_rets, ddof=1)
+            if std_ret > 0:
+                wf_result.aggregate_sharpe = round(
+                    np.mean(excess) / std_ret * math.sqrt(252), 4,
+                )
+
+    # Aggregate max drawdown
+    if all_test_equity:
+        wf_result.aggregate_max_drawdown_pct = round(
+            max(e.drawdown_pct for e in all_test_equity), 4,
+        )
+
+    # --- Single-pass comparison ---
+    if on_progress:
+        on_progress(95, "Running single-pass comparison")
+
+    single_engine = BacktestEngine(config)
+    single_result = single_engine.run()
+    wf_result.single_pass_sharpe = single_result.summary.sharpe_ratio
+
+    if on_progress:
+        on_progress(100, "Complete")
+
+    logger.info(
+        "Walk-forward complete: %d folds, aggregate Sharpe=%.4f vs single-pass=%.4f",
+        len(wf_result.folds), wf_result.aggregate_sharpe, wf_result.single_pass_sharpe,
+    )
+
+    return wf_result
+
+
+def _derive_weights_from_trades(
+    trades: List[BacktestTrade],
+    base_weights: Dict[str, float],
+) -> Dict[str, float]:
+    """Derive adjusted weights from training trades using feature win-rate analysis.
+
+    For each feature, computes a weighted win rate from the trades'
+    score breakdowns. Features with higher win rates get nudged up.
+    """
+    from backend.modules.learning_engine import (
+        LearningEngine, TradeGrade, DECAY_FACTOR,
+        MAX_DAILY_DRIFT, WEIGHT_FLOOR, WEIGHT_CEILING,
+    )
+
+    if len(trades) < 10:
+        return dict(base_weights)
+
+    # Build feature stats from trade outcomes
+    feature_wins: Dict[str, float] = defaultdict(float)
+    feature_total: Dict[str, float] = defaultdict(float)
+
+    for i, trade in enumerate(trades):
+        decay = DECAY_FACTOR ** (len(trades) - 1 - i)
+        is_winner = trade.net_pnl > 0
+
+        # Use score_breakdown if we had it; otherwise treat all features equally
+        # BacktestTrade doesn't store breakdown, so we distribute evenly
+        for feat in base_weights:
+            feature_total[feat] += decay
+            if is_winner:
+                feature_wins[feat] += decay
+
+    # Nudge weights based on win ratio
+    adjusted = dict(base_weights)
+    for feat in base_weights:
+        total = feature_total.get(feat, 0)
+        if total < 0.01:
+            continue
+        win_ratio = feature_wins[feat] / total
+        raw_delta = (win_ratio - 0.5) * 0.10
+        clamped = max(-MAX_DAILY_DRIFT, min(MAX_DAILY_DRIFT, raw_delta))
+        new_val = max(WEIGHT_FLOOR, min(WEIGHT_CEILING, adjusted[feat] + clamped))
+        adjusted[feat] = new_val
+
+    # Renormalise
+    total_w = sum(adjusted.values())
+    if total_w > 0:
+        adjusted = {k: round(v / total_w, 6) for k, v in adjusted.items()}
+
+    return adjusted

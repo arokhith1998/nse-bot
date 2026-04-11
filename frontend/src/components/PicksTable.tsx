@@ -26,6 +26,8 @@ interface PicksTableProps {
   topPicks: Pick[];
   stretchPicks: Pick[];
   weights?: Record<string, number>;
+  advisory?: string[];
+  recommendedPickCount?: number;
 }
 
 function ScoreBadge({ score }: { score: number }) {
@@ -417,6 +419,8 @@ export default function PicksTable({
   topPicks,
   stretchPicks,
   weights,
+  advisory,
+  recommendedPickCount,
 }: PicksTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -450,6 +454,21 @@ export default function PicksTable({
           {topPicks.length + stretchPicks.length} total
         </span>
       </div>
+
+      {advisory && advisory.length > 0 && (
+        <div className="mb-4 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+          <p className="text-[10px] font-semibold text-yellow-400 uppercase tracking-wider mb-1.5">
+            Advisory
+          </p>
+          <ul className="space-y-1">
+            {advisory.map((line, i) => (
+              <li key={i} className="text-xs text-mute leading-relaxed">
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <PicksSection
         title={`Top Picks (${topPicks.length})`}

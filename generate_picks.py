@@ -22,9 +22,8 @@ WEIGHTS_FILE = HERE / "weights.json"
 CAPITAL=1000.0; RISK_PER_TRADE=50.0; ATR_SL_MULT=1.0; RR=2.0; TOP_N=6
 MIN_PRICE=5.0; MAX_PRICE=5000.0; MIN_AVG_VOL=200_000; HIST_DAYS=120
 
-DEFAULT_WEIGHTS = {"trend":0.20,"momentum":0.18,"volume":0.12,"breakout":0.13,
-                   "volatility":0.08,"liquidity":0.04,"news":0.10,
-                   "stoch":0.05,"bbands":0.05,"gap":0.03,"sentiment":0.02}
+DEFAULT_WEIGHTS = {"trend":0.25,"momentum":0.20,"volume":0.15,"breakout":0.15,
+                   "volatility":0.10,"news":0.15}
 
 # Groww intraday (MIS) cost model — round-trip, rough
 # brokerage: min(20, 0.03% of turnover) per leg; STT 0.025% on sell;
@@ -157,9 +156,7 @@ def score_stock(sym,df,ltp,news_hit,sentiment,W):
         sent_s=max(0,min(100,50+sentiment*25))  # sentiment in [-2,+2]
 
         score=(W["trend"]*trend+W["momentum"]*mom+W["volume"]*vols+W["breakout"]*brk+
-               W["volatility"]*volat+W["liquidity"]*liq+W["news"]*news_s+
-               W.get("stoch",0)*stoch_s+W.get("bbands",0)*bb_s+
-               W.get("gap",0)*gap_s+W.get("sentiment",0)*sent_s)
+               W["volatility"]*volat+W["news"]*news_s)
 
         sl=round(price-ATR_SL_MULT*a14,2); tgt=round(price+RR*ATR_SL_MULT*a14,2)
         rps=max(price-sl,0.01); qty=max(1,int(RISK_PER_TRADE/rps))

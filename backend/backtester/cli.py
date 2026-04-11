@@ -21,7 +21,7 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-from backend.backtester.engine import BacktestConfig, BacktestEngine
+from backend.backtester.engine import BacktestConfig, BacktestEngine, walk_forward_backtest
 from backend.backtester.report import generate_text_report, save_report
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,23 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Minimal output (suppress progress, only print summary).",
     )
+    parser.add_argument(
+        "--walk-forward",
+        action="store_true",
+        help="Run walk-forward validation instead of single-pass backtest.",
+    )
+    parser.add_argument(
+        "--train-months",
+        type=int,
+        default=3,
+        help="Walk-forward training window in months. Default: 3",
+    )
+    parser.add_argument(
+        "--test-months",
+        type=int,
+        default=1,
+        help="Walk-forward test window in months. Default: 1",
+    )
 
     return parser
 
@@ -183,9 +200,10 @@ def main(argv: list[str] | None = None) -> None:
 
     # Print header
     if not args.quiet:
+        mode = "Walk-Forward" if args.walk_forward else "Single-Pass"
         print()
         print("=" * 55)
-        print("  NSE Market Intelligence -- Backtester")
+        print(f"  NSE Market Intelligence -- Backtester ({mode})")
         print("=" * 55)
         print(f"  Universe:    {args.universe}")
         print(f"  Period:      {args.start} to {args.end}")
@@ -197,24 +215,74 @@ def main(argv: list[str] | None = None) -> None:
         print("=" * 55)
         print()
 
-    # Run backtest
-    engine = BacktestEngine(config)
-    if not args.quiet:
-        engine.on_progress = _progress_bar
+    if args.walk_forward:
+        # Walk-forward mode
+        if not args.quiet:
+            print(f"  Mode:        Walk-Forward (train={args.train_months}m, test={args.test_months}m)")
 
-    result = engine.run()
+        wf_result = walk_forward_backtest(
+            config,
+            train_months=args.train_months,
+            test_months=args.test_months,
+            on_progress=_progress_bar if not args.quiet else None,
+        )
 
-    # Print report
-    report_text = generate_text_report(result)
-    print(report_text)
-
-    # Save reports
-    paths = save_report(result, output_dir=args.output)
-    if not args.quiet:
-        print(f"  Reports saved to:")
-        print(f"    Text: {paths['text_path']}")
-        print(f"    JSON: {paths['json_path']}")
+        # Print walk-forward report
         print()
+        print("=" * 55)
+        print("  Walk-Forward Results")
+        print("=" * 55)
+        print(f"  Folds:            {len(wf_result.folds)}")
+        print(f"  Aggregate Trades: {wf_result.aggregate_trades}")
+        print(f"  Aggregate Winners:{wf_result.aggregate_winners}")
+        print(f"  Win Rate:         {wf_result.aggregate_win_rate_pct:.2f}%")
+        print(f"  Total PnL:        Rs {wf_result.aggregate_pnl:,.2f} ({wf_result.aggregate_pnl_pct:+.2f}%)")
+        print(f"  Sharpe (WF):      {wf_result.aggregate_sharpe:.4f}")
+        print(f"  Sharpe (single):  {wf_result.single_pass_sharpe:.4f}")
+        print(f"  Max Drawdown:     {wf_result.aggregate_max_drawdown_pct:.2f}%")
+        print("-" * 55)
+
+        for fold in wf_result.folds:
+            print(
+                f"  Fold {fold.fold_number}: "
+                f"test {fold.test_start}->{fold.test_end}  "
+                f"trades={fold.total_trades}  "
+                f"WR={fold.win_rate_pct:.1f}%  "
+                f"PnL={fold.total_pnl:+.0f}  "
+                f"Sharpe={fold.sharpe_ratio:.3f}"
+            )
+
+        print("=" * 55)
+
+        diff = wf_result.aggregate_sharpe - wf_result.single_pass_sharpe
+        if diff < -0.3:
+            print("  WARNING: Walk-forward Sharpe significantly worse than single-pass.")
+            print("  The learning loop may be overfitting to in-sample data.")
+        elif diff > 0.1:
+            print("  Walk-forward outperforms single-pass -- adaptive weights are adding value.")
+        else:
+            print("  Walk-forward and single-pass are comparable -- weights are stable.")
+        print()
+
+    else:
+        # Standard single-pass backtest
+        engine = BacktestEngine(config)
+        if not args.quiet:
+            engine.on_progress = _progress_bar
+
+        result = engine.run()
+
+        # Print report
+        report_text = generate_text_report(result)
+        print(report_text)
+
+        # Save reports
+        paths = save_report(result, output_dir=args.output)
+        if not args.quiet:
+            print(f"  Reports saved to:")
+            print(f"    Text: {paths['text_path']}")
+            print(f"    JSON: {paths['json_path']}")
+            print()
 
 
 if __name__ == "__main__":

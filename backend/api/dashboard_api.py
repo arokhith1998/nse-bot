@@ -35,6 +35,7 @@ from backend.models import (
     Signal,
     Trade,
     UniverseMember,
+    UserSettings,
     WeightsHistory,
 )
 
@@ -900,16 +901,28 @@ async def get_settings() -> SettingsResponse:
 
 
 @router.put("/api/settings", response_model=SettingsResponse)
-async def update_settings(update: SettingsUpdateRequest) -> SettingsResponse:
+async def update_settings(
+    update: SettingsUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SettingsResponse:
     """Update configuration (capital, risk params, etc.).
 
-    Note: changes are applied to the in-memory settings singleton.
-    They do not persist across restarts unless written to .env.
+    Capital is persisted to the database so it survives restarts.
+    Other settings remain in-memory only.
     """
     if update.capital is not None:
         if update.capital <= 0:
             raise HTTPException(status_code=422, detail="Capital must be positive.")
         settings.capital = update.capital
+        # Persist capital to DB
+        from sqlalchemy.dialects.sqlite import insert as sqlite_upsert
+        stmt = sqlite_upsert(UserSettings).values(
+            key="capital", value=str(update.capital),
+        ).on_conflict_do_update(
+            index_elements=["key"],
+            set_={"value": str(update.capital)},
+        )
+        await db.execute(stmt)
 
     if update.risk_per_trade_pct is not None:
         if not (0.1 <= update.risk_per_trade_pct <= 10.0):

@@ -9,6 +9,7 @@ caches results, and provides universe lists (Nifty 50, Nifty 200).
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, timedelta
 from typing import Dict, List, Optional
 
@@ -202,6 +203,122 @@ def load_benchmark(
     df.dropna(subset=["Close"], inplace=True)
 
     return df
+
+
+# ---------------------------------------------------------------------------
+# Full NSE Universe (from EQUITY_L.csv)
+# ---------------------------------------------------------------------------
+
+_EQUITY_L_CACHE: Optional[List[str]] = None
+_EQUITY_L_CACHE_TIME: float = 0
+
+
+def load_full_nse_universe(cache_ttl_hours: int = 168) -> List[str]:
+    """Fetch the full NSE equity universe from EQUITY_L.csv.
+
+    Results are cached for ``cache_ttl_hours`` (default 7 days).
+    Falls back to NIFTY200_SYMBOLS if the fetch fails.
+    """
+    global _EQUITY_L_CACHE, _EQUITY_L_CACHE_TIME
+    if _EQUITY_L_CACHE and (time.time() - _EQUITY_L_CACHE_TIME) < cache_ttl_hours * 3600:
+        return _EQUITY_L_CACHE
+
+    try:
+        import requests
+        r = requests.get(
+            "https://archives.nseindia.com/content/equities/EQUITY_L.csv",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        if r.status_code == 200:
+            syms = [
+                ln.split(",")[0].strip()
+                for ln in r.text.splitlines()[1:]
+                if ln.strip()
+            ]
+            syms = [s for s in syms if s and s != "SYMBOL"]
+            _EQUITY_L_CACHE = syms
+            _EQUITY_L_CACHE_TIME = time.time()
+            logger.info("Loaded %d symbols from EQUITY_L.csv", len(syms))
+            return syms
+    except Exception as exc:
+        logger.warning("EQUITY_L.csv fetch failed: %s", exc)
+
+    logger.info("Falling back to NIFTY200 (%d symbols)", len(NIFTY200_SYMBOLS))
+    return list(NIFTY200_SYMBOLS)
+
+
+def build_watchlist(
+    min_avg_volume: int = 50_000,
+    min_price: float = 10.0,
+    max_price: float = 50_000.0,
+    min_turnover: float = 10_000_000,
+) -> List[str]:
+    """Build a filtered watchlist from the full NSE universe.
+
+    Applies liquidity and price filters. Downloads a quick 5-day history
+    per symbol to check volume. Returns 200-400 symbols that pass filters.
+    This is designed to run weekly (Sunday evening).
+    """
+    import yfinance as yf
+
+    full = load_full_nse_universe()
+    logger.info("Building watchlist from %d symbols...", len(full))
+
+    watchlist = []
+    BATCH = 40
+
+    for i in range(0, len(full), BATCH):
+        batch = full[i:i + BATCH]
+        tickers_str = " ".join(f"{s}.NS" for s in batch)
+        try:
+            data = yf.download(
+                tickers_str, period="5d", group_by="ticker",
+                progress=False, threads=True,
+            )
+            if data is None or data.empty:
+                continue
+
+            for sym in batch:
+                try:
+                    ticker = f"{sym}.NS"
+                    if len(batch) == 1:
+                        df = data
+                    else:
+                        if ticker not in data.columns.get_level_values(0):
+                            continue
+                        df = data[ticker].dropna()
+
+                    if df.empty or len(df) < 2:
+                        continue
+
+                    close = float(df["Close"].iloc[-1])
+                    vol = float(df["Volume"].mean())
+
+                    if close < min_price or close > max_price:
+                        continue
+                    if vol < min_avg_volume:
+                        continue
+                    if vol * close < min_turnover:
+                        continue
+
+                    watchlist.append(sym)
+                except Exception:
+                    continue
+
+            # Rate limiting
+            time.sleep(0.5)
+        except Exception:
+            continue
+
+        if (i // BATCH + 1) % 10 == 0:
+            logger.info(
+                "Watchlist progress: %d/%d batches, %d symbols passed",
+                i // BATCH + 1, (len(full) + BATCH - 1) // BATCH, len(watchlist),
+            )
+
+    logger.info("Watchlist built: %d symbols from %d universe", len(watchlist), len(full))
+    return watchlist
 
 
 def load_nifty50_symbols() -> List[str]:

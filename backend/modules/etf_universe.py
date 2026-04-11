@@ -127,12 +127,7 @@ _CATEGORY_SCORING: Dict[ETFCategory, Dict[str, float]] = {
         "volume": 0.8,
         "breakout": 1.0,
         "volatility": 0.8,
-        "liquidity": 0.7,   # broad ETFs are always liquid
         "news": 0.6,        # less stock-specific news
-        "stoch": 1.0,
-        "bbands": 1.0,
-        "gap": 0.9,
-        "sentiment": 0.7,
     },
     ETFCategory.SECTOR: {
         "trend": 1.1,
@@ -140,12 +135,7 @@ _CATEGORY_SCORING: Dict[ETFCategory, Dict[str, float]] = {
         "volume": 1.0,
         "breakout": 1.1,
         "volatility": 1.0,
-        "liquidity": 0.9,
         "news": 1.2,         # sector rotation themes
-        "stoch": 1.0,
-        "bbands": 1.0,
-        "gap": 1.0,
-        "sentiment": 1.1,
     },
     ETFCategory.COMMODITY: {
         "trend": 1.3,
@@ -153,12 +143,7 @@ _CATEGORY_SCORING: Dict[ETFCategory, Dict[str, float]] = {
         "volume": 0.7,
         "breakout": 1.2,
         "volatility": 1.1,
-        "liquidity": 0.6,
         "news": 1.3,         # global macro / commodity news matters
-        "stoch": 0.9,
-        "bbands": 0.9,
-        "gap": 1.1,
-        "sentiment": 1.2,
     },
     ETFCategory.LIQUID_BOND: {
         "trend": 0.5,
@@ -166,12 +151,7 @@ _CATEGORY_SCORING: Dict[ETFCategory, Dict[str, float]] = {
         "volume": 0.3,
         "breakout": 0.2,
         "volatility": 0.3,   # near-zero vol is fine
-        "liquidity": 0.2,    # always liquid
         "news": 0.4,
-        "stoch": 0.5,
-        "bbands": 0.5,
-        "gap": 0.2,
-        "sentiment": 0.3,
     },
 }
 

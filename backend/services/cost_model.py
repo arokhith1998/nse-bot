@@ -7,6 +7,7 @@ in INR.  Charges are as of the 2024-25 SEBI/NSE schedule.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -201,3 +202,71 @@ def calculate_net_rr(
         net_rr=round(net_rr, 4),
         cost_as_pct_of_profit=round(cost_pct, 2),
     )
+
+
+# ── Slippage Model ──────────────────────────────────────────────────
+
+def estimate_slippage(price: float, qty: int, avg_daily_volume: float) -> float:
+    """Estimate slippage as a percentage of price.
+
+    Uses a square-root market impact model:
+        slippage_pct = 0.1 * sqrt(qty / avg_daily_volume)
+
+    For illiquid stocks (avg_daily_volume < 100K), adds 0.1% premium.
+    Capped at 0.5%.
+
+    Parameters
+    ----------
+    price : float
+        Current price (unused in formula but available for future models).
+    qty : int
+        Order quantity in shares.
+    avg_daily_volume : float
+        Average daily volume in shares (20-day average).
+
+    Returns
+    -------
+    float
+        Estimated one-way slippage as a percentage (e.g., 0.05 means 0.05%).
+    """
+    if avg_daily_volume <= 0:
+        return 0.5  # max slippage for unknown liquidity
+
+    participation_rate = qty / avg_daily_volume
+    slippage_pct = 0.1 * math.sqrt(participation_rate) * 100
+
+    # Illiquidity premium
+    if avg_daily_volume < 100_000:
+        slippage_pct += 0.1
+
+    return round(min(slippage_pct, 0.5), 4)
+
+
+def total_execution_cost(
+    price: float,
+    qty: int,
+    avg_daily_volume: float,
+    cost_fn=groww_intraday_cost,
+) -> float:
+    """Total round-trip cost: brokerage + statutory + estimated slippage.
+
+    Parameters
+    ----------
+    price : float
+        Entry price.
+    qty : int
+        Number of shares.
+    avg_daily_volume : float
+        20-day average daily volume.
+    cost_fn : callable
+        Cost calculator (default: Groww).
+
+    Returns
+    -------
+    float
+        Total estimated round-trip execution cost in INR.
+    """
+    charges = cost_fn(price, qty)
+    slip_pct = estimate_slippage(price, qty, avg_daily_volume)
+    slippage_cost = price * qty * slip_pct / 100 * 2  # both legs
+    return round(charges.total + slippage_cost, 2)

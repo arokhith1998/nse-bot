@@ -37,8 +37,7 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "volume": 0.15,
     "breakout": 0.15,
     "volatility": 0.10,
-    "news": 0.10,
-    "liquidity": 0.05,
+    "news": 0.15,
 }
 
 
@@ -262,92 +261,248 @@ def _fetch_news() -> List[Dict]:
 
 # ─── Stock Universe Scan ────────────────────────────────────────────────
 
-# Use the Nifty 200 universe from backtester/data_loader
-from backend.backtester.data_loader import NIFTY200_SYMBOLS
+# Universe management: two-phase scanning
+# Pre-market scans the full watchlist (~200-300), caches top 100 for intraday
+from backend.backtester.data_loader import NIFTY200_SYMBOLS, load_full_nse_universe
 
-SCAN_UNIVERSE = NIFTY200_SYMBOLS  # ~200 stocks
+SCAN_UNIVERSE = list(NIFTY200_SYMBOLS)  # default, updated by pre-market scan
+SCAN_UNIVERSE_TOP: List[str] = []       # top scorers from pre-market, used for intraday
+
+# Module-level cache for news scores (populated before each scan)
+_news_score_cache: Dict[str, float] = {}
+
+
+async def _refresh_news_scores():
+    """Load recent news items from DB and build a symbol->score (0-100) map."""
+    global _news_score_cache
+    try:
+        from sqlalchemy import select, func
+        async with AsyncSessionLocal() as session:
+            cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24)
+            result = await session.execute(
+                select(NewsItemModel.symbol, func.max(NewsItemModel.weighted_impact))
+                .where(NewsItemModel.timestamp >= cutoff)
+                .where(NewsItemModel.symbol.isnot(None))
+                .group_by(NewsItemModel.symbol)
+            )
+            rows = result.all()
+            _news_score_cache.clear()
+            for sym, impact in rows:
+                if sym:
+                    # weighted_impact is 0.0-1.0, scale to 0-100
+                    _news_score_cache[sym.upper()] = min(float(impact) * 100, 100.0)
+            logger.info("[scanner] Loaded news scores for %d symbols", len(_news_score_cache))
+    except Exception:
+        logger.warning("[scanner] Failed to refresh news scores")
+
+
+async def _save_signals(signals: List[Dict], regime_label: str) -> int:
+    """Expire old pending signals and save new ones to DB."""
+    from backend.config import pick_count_for_capital
+
+    # Expire old pending signals
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import update
+        await session.execute(
+            update(Signal)
+            .where(Signal.status == "pending")
+            .values(status="expired")
+        )
+        await session.commit()
+
+    n_picks = pick_count_for_capital(settings.capital)
+    count = 0
+    async with AsyncSessionLocal() as session:
+        now = dt.datetime.now(dt.timezone.utc)
+
+        for sig in signals[:n_picks * 2]:  # top + stretch
+            try:
+                price = sig.get("price", 0)
+                atr = sig.get("atr", price * 0.02)
+                if price <= 0:
+                    continue
+
+                sl = round(price - 1.5 * atr, 2)
+                target1 = round(price + 2.0 * atr, 2)
+                target2 = round(price + 3.0 * atr, 2)
+                risk = price - sl
+                if risk <= 0:
+                    continue
+
+                risk_amount = settings.capital * settings.risk_per_trade_pct / 100
+                base_qty = max(1, int(risk_amount / risk))
+                confidence = min(sig.get("score", 50) / 100, 0.95)
+                qty = max(1, int(base_qty * (0.5 + 0.5 * confidence)))
+                pos_size_pct = (qty * price / settings.capital) * 100
+
+                signal = Signal(
+                    timestamp=now,
+                    symbol=sig["symbol"],
+                    instrument_type="stock",
+                    direction="long",
+                    score=sig.get("score", 50.0),
+                    strategy=sig.get("strategy", "MOMENTUM"),
+                    regime_at_entry=regime_label,
+                    source="scanner",
+                    entry_zone_low=round(price * 0.998, 2),
+                    entry_zone_high=round(price * 1.002, 2),
+                    stop_loss=sl,
+                    target1=target1,
+                    target2=target2,
+                    confidence=confidence,
+                    position_size_pct=round(pos_size_pct, 1),
+                    do_not_enter_after=now + dt.timedelta(hours=6),
+                    best_exit_window="14:30-15:00 IST",
+                    explanation=sig.get("explanation", ""),
+                    status="pending",
+                )
+                session.add(signal)
+                count += 1
+            except Exception:
+                logger.warning("[scanner] Failed to save signal for %s", sig.get("symbol"))
+
+        await session.commit()
+
+    return count
+
+
+async def run_premarket_full_scan(regime_label: str = "RANGE_CHOP") -> int:
+    """Pre-market scan: score full watchlist, cache top 100 for intraday.
+
+    This runs at 08:45 IST. Scores all ~200-300 watchlist symbols and
+    saves the top 100 for fast intraday refreshes every 15 min.
+    """
+    global SCAN_UNIVERSE_TOP
+    logger.info("[scanner] Running PRE-MARKET full scan...")
+    try:
+        await _refresh_news_scores()
+        universe = await asyncio.to_thread(_build_universe, SCAN_UNIVERSE)
+        if not universe:
+            logger.warning("[scanner] Pre-market scan: no data")
+            return 0
+
+        # Cache top 100 scored symbols for intraday
+        SCAN_UNIVERSE_TOP = [s["symbol"] for s in universe[:100]]
+        logger.info(
+            "[scanner] Pre-market cached top %d symbols for intraday refresh",
+            len(SCAN_UNIVERSE_TOP),
+        )
+
+        # Generate and save signals from the full scan
+        signals = _generate_signals(universe, regime_label)
+        count = await _save_signals(signals, regime_label)
+        logger.info("[scanner] Pre-market scan generated %d signals", count)
+        return count
+    except Exception:
+        logger.exception("[scanner] Pre-market full scan failed")
+        return 0
+
+
+async def fetch_daily_movers() -> List[str]:
+    """Fetch NSE daily top gainers, losers, and volume spikes.
+
+    Scrapes NSE's public market status endpoints for the day's most active
+    symbols (~20-30 total). Returns symbols NOT already in SCAN_UNIVERSE_TOP,
+    and merges them in as dynamic additions for intraday scanning.
+    """
+    import httpx
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+    }
+
+    movers: set[str] = set()
+
+    # NSE endpoints for gainers/losers/most active
+    urls = [
+        "https://www.nseindia.com/api/live-analysis-variations?index=gainers",
+        "https://www.nseindia.com/api/live-analysis-variations?index=losers",
+        "https://www.nseindia.com/api/live-analysis-most-active-securities?index=volume",
+    ]
+
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            # First hit the homepage to get cookies (NSE requires this)
+            try:
+                await client.get("https://www.nseindia.com", headers=headers)
+            except Exception:
+                pass
+
+            for url in urls:
+                try:
+                    resp = await client.get(url, headers=headers)
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+
+                    # Extract symbols from the response
+                    # NSE returns different structures; handle both
+                    if isinstance(data, dict):
+                        # Try 'data' key first, then 'NIFTY' or other index keys
+                        items = data.get("data", [])
+                        if not items:
+                            for key in data:
+                                if isinstance(data[key], list):
+                                    items = data[key]
+                                    break
+                    elif isinstance(data, list):
+                        items = data
+                    else:
+                        continue
+
+                    for item in items[:15]:  # top 15 from each list
+                        sym = item.get("symbol") or item.get("Symbol") or ""
+                        sym = sym.strip().upper()
+                        if sym and len(sym) <= 20:
+                            movers.add(sym)
+
+                except Exception as e:
+                    logger.debug("[scanner] Failed to fetch movers from %s: %s", url, e)
+                    continue
+
+    except Exception:
+        logger.warning("[scanner] Failed to fetch daily movers (network error)")
+        return []
+
+    # Filter out symbols already in the intraday universe
+    existing = set(SCAN_UNIVERSE_TOP) | set(SCAN_UNIVERSE)
+    new_movers = [s for s in movers if s not in existing]
+
+    if new_movers:
+        SCAN_UNIVERSE_TOP.extend(new_movers)
+        logger.info(
+            "[scanner] Dynamic additions: %d new movers added to intraday universe: %s",
+            len(new_movers), ", ".join(new_movers[:10]),
+        )
+    else:
+        logger.info("[scanner] No new movers outside existing universe (%d checked)", len(movers))
+
+    return new_movers
 
 
 async def run_stock_scan(regime_label: str = "RANGE_CHOP") -> int:
-    """Scan Nifty 50 stocks, compute indicators, generate signals.
+    """Intraday scan: re-score top 100 symbols from pre-market cache.
 
     Returns the number of signals generated.
     """
-    logger.info("[scanner] Running stock scan for %d symbols...", len(SCAN_UNIVERSE))
+    # Use cached top symbols if available, else fall back to full universe
+    scan_symbols = SCAN_UNIVERSE_TOP if SCAN_UNIVERSE_TOP else SCAN_UNIVERSE
+    logger.info("[scanner] Running intraday scan for %d symbols...", len(scan_symbols))
     try:
+        # Load news scores before scoring stocks
+        await _refresh_news_scores()
+
         # Fetch data and compute indicators in thread
-        universe = await asyncio.to_thread(_build_universe, SCAN_UNIVERSE)
+        universe = await asyncio.to_thread(_build_universe, scan_symbols)
         if not universe:
             logger.warning("[scanner] No stock data fetched")
             return 0
 
-        # Expire old pending signals
-        async with AsyncSessionLocal() as session:
-            from sqlalchemy import update
-            await session.execute(
-                update(Signal)
-                .where(Signal.status == "pending")
-                .values(status="expired")
-            )
-            await session.commit()
-
         # Generate and save new signals
         signals = _generate_signals(universe, regime_label)
-
-        count = 0
-        async with AsyncSessionLocal() as session:
-            now = dt.datetime.now(dt.timezone.utc)
-            ist_now = dt.datetime.now(IST)
-
-            for sig in signals[:settings.max_open_positions * 2]:  # Top N signals
-                try:
-                    # Compute entry, SL, target from ATR
-                    price = sig.get("price", 0)
-                    atr = sig.get("atr", price * 0.02)
-                    if price <= 0:
-                        continue
-
-                    sl = round(price - 1.5 * atr, 2)
-                    target1 = round(price + 2.0 * atr, 2)
-                    target2 = round(price + 3.0 * atr, 2)
-                    risk = price - sl
-                    if risk <= 0:
-                        continue
-
-                    # Position sizing
-                    risk_amount = settings.capital * settings.risk_per_trade_pct / 100
-                    qty = max(1, int(risk_amount / risk))
-                    pos_size_pct = (qty * price / settings.capital) * 100
-
-                    signal = Signal(
-                        timestamp=now,
-                        symbol=sig["symbol"],
-                        instrument_type="stock",
-                        direction="long",
-                        score=sig.get("score", 50.0),
-                        strategy=sig.get("strategy", "MOMENTUM"),
-                        regime_at_entry=regime_label,
-                        source="scanner",
-                        entry_zone_low=round(price * 0.998, 2),
-                        entry_zone_high=round(price * 1.002, 2),
-                        stop_loss=sl,
-                        target1=target1,
-                        target2=target2,
-                        confidence=min(sig.get("score", 50) / 100, 0.95),
-                        position_size_pct=round(pos_size_pct, 1),
-                        do_not_enter_after=now + dt.timedelta(hours=6),
-                        best_exit_window="14:30-15:00 IST",
-                        explanation=sig.get("explanation", ""),
-                        status="pending",
-                    )
-                    session.add(signal)
-                    count += 1
-                except Exception:
-                    logger.warning("[scanner] Failed to save signal for %s", sig.get("symbol"))
-
-            await session.commit()
-
-        logger.info("[scanner] Generated %d signals", count)
+        count = await _save_signals(signals, regime_label)
+        logger.info("[scanner] Intraday scan generated %d signals", count)
         return count
     except Exception:
         logger.exception("[scanner] Stock scan failed")
@@ -405,6 +560,15 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                 prev_close = float(close[-2]) if len(close) > 1 else price
 
                 if price <= 0:
+                    continue
+
+                # Liquidity hard filter: min 50,000 shares/day avg volume
+                avg_vol_20d = float(np.mean(volume[-20:])) if len(volume) >= 20 else float(np.mean(volume))
+                if avg_vol_20d < 50_000:
+                    continue
+                # Also filter by minimum daily turnover (Rs 1 Cr = 10M)
+                avg_turnover = avg_vol_20d * price
+                if avg_turnover < 10_000_000:
                     continue
 
                 # RSI (14)
@@ -468,14 +632,17 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                 volume_score = min(vol_ratio * 50, 100)
                 breakout_score = 80 if near_20d_high and vol_ratio > 1.2 else 30
                 volatility_score = min(max(100 - atr_pct * 20, 0), 100)
+                # News score: 0-100 based on whether symbol has recent news
+                news_score = _news_score_cache.get(symbol.upper(), 0.0)
 
-                # Composite score
+                # Composite score (6 factors)
                 score = (
                     trend_score * DEFAULT_WEIGHTS["trend"]
                     + momentum_score * DEFAULT_WEIGHTS["momentum"]
                     + volume_score * DEFAULT_WEIGHTS["volume"]
                     + breakout_score * DEFAULT_WEIGHTS["breakout"]
                     + volatility_score * DEFAULT_WEIGHTS["volatility"]
+                    + news_score * DEFAULT_WEIGHTS["news"]
                 )
 
                 # Determine strategy
@@ -501,10 +668,16 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                 if ret5d > 2:
                     notes.append(f"5d momentum +{ret5d:.1f}%")
 
-                # Cost model (Groww intraday)
-                qty = max(1, int((settings.capital * settings.risk_per_trade_pct / 100) / (1.5 * atr)))
+                # Cost model (Groww intraday) with confidence-weighted sizing + slippage
+                from backend.services.cost_model import estimate_slippage
+
+                confidence = min(score / 100, 0.95)
+                base_qty = max(1, int((settings.capital * settings.risk_per_trade_pct / 100) / (1.5 * atr)))
+                qty = max(1, int(base_qty * (0.5 + 0.5 * confidence)))
                 buy_val = price * qty
-                cost_roundtrip = 40 + buy_val * 0.0005
+                slippage_pct = estimate_slippage(price, qty, avg_vol_20d)
+                slippage_cost = buy_val * slippage_pct / 100 * 2  # both legs
+                cost_roundtrip = 40 + buy_val * 0.0005 + slippage_cost
                 net_profit = round((2.0 * atr * qty) - cost_roundtrip, 2)
                 net_loss = round((-1.5 * atr * qty) - cost_roundtrip, 2)
                 net_rr = round(abs(net_profit / net_loss), 2) if net_loss != 0 else 0
@@ -670,10 +843,10 @@ async def run_full_scan() -> Dict:
     except Exception as e:
         summary["errors"].append(f"news: {e}")
 
-    # 3. Stock scan
+    # 3. Stock scan (uses pre-market full scan to also cache top symbols)
     try:
         regime_label = summary["regime"] or "RANGE_CHOP"
-        summary["signal_count"] = await run_stock_scan(regime_label)
+        summary["signal_count"] = await run_premarket_full_scan(regime_label)
     except Exception as e:
         summary["errors"].append(f"stocks: {e}")
 

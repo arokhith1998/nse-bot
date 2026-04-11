@@ -50,6 +50,8 @@ export interface PicksResponse {
   news_count: number;
   top_picks: Pick[];
   stretch_picks: Pick[];
+  advisory?: string[];
+  recommended_pick_count?: number;
   disclaimer: string;
 }
 
@@ -59,8 +61,8 @@ export interface ScoreBreakdown {
   volume: number;
   breakout: number;
   volatility: number;
-  liquidity: number;
   news: number;
+  liquidity?: number;
   stoch?: number;
   bbands?: number;
   gap?: number;

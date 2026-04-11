@@ -26,7 +26,9 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.backtester.engine import BacktestConfig, BacktestEngine
+from backend.backtester.engine import (
+    BacktestConfig, BacktestEngine, walk_forward_backtest,
+)
 from backend.backtester.report import generate_json_report, save_report
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,23 @@ class BacktestRequest(BaseModel):
     top_n: int = Field(default=6, ge=1, le=30)
     use_regime_filter: bool = Field(default=True)
     benchmark: str = Field(default="^NSEI")
+
+
+class WalkForwardRequest(BaseModel):
+    """Request body for POST /api/backtest/walk-forward."""
+
+    start_date: str = Field(default="2025-01-01")
+    end_date: str = Field(default="")
+    universe: str = Field(default="nifty50")
+    capital: float = Field(default=100_000, ge=10_000, le=100_000_000)
+    risk_pct: float = Field(default=1.0, ge=0.1, le=10.0)
+    max_positions: int = Field(default=6, ge=1, le=30)
+    cost_model: str = Field(default="groww", pattern="^(groww|zerodha)$")
+    top_n: int = Field(default=6, ge=1, le=30)
+    use_regime_filter: bool = Field(default=True)
+    benchmark: str = Field(default="^NSEI")
+    train_months: int = Field(default=3, ge=1, le=12)
+    test_months: int = Field(default=1, ge=1, le=6)
 
 
 class BacktestJobResponse(BaseModel):
@@ -333,6 +352,123 @@ async def list_backtest_history() -> List[dict]:
     # Sort newest first
     items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Walk-forward backtest
+# ═══════════════════════════════════════════════════════════════════════
+
+def _run_walk_forward_job(job_id: str, config: BacktestConfig,
+                          train_months: int, test_months: int) -> None:
+    """Execute a walk-forward backtest in a background thread."""
+    try:
+        _jobs[job_id]["status"] = "running"
+
+        def on_progress(pct: int, msg: str) -> None:
+            _jobs[job_id]["progress_pct"] = pct
+            _jobs[job_id]["progress_msg"] = msg
+
+        wf_result = walk_forward_backtest(
+            config, train_months=train_months, test_months=test_months,
+            on_progress=on_progress,
+        )
+
+        result_dict = wf_result.to_dict()
+        _jobs[job_id]["status"] = "completed"
+        _jobs[job_id]["progress_pct"] = 100
+        _jobs[job_id]["progress_msg"] = "Complete"
+        _jobs[job_id]["result"] = result_dict
+        _jobs[job_id]["total_trades"] = wf_result.aggregate_trades
+        _jobs[job_id]["total_pnl"] = wf_result.aggregate_pnl
+        _jobs[job_id]["win_rate_pct"] = wf_result.aggregate_win_rate_pct
+
+        logger.info(
+            "Walk-forward job %s completed: %d folds, %d trades, "
+            "Sharpe=%.4f vs single-pass=%.4f",
+            job_id, len(wf_result.folds), wf_result.aggregate_trades,
+            wf_result.aggregate_sharpe, wf_result.single_pass_sharpe,
+        )
+
+    except Exception as exc:
+        logger.exception("Walk-forward job %s failed", job_id)
+        _jobs[job_id]["status"] = "failed"
+        _jobs[job_id]["error"] = str(exc)
+
+
+@router.post("/walk-forward", response_model=BacktestJobResponse)
+async def start_walk_forward(req: WalkForwardRequest) -> BacktestJobResponse:
+    """Start a walk-forward backtest in the background.
+
+    Returns a job ID. Poll /api/backtest/status/{job_id} for progress,
+    then GET /api/backtest/result/{job_id} for the full result.
+    """
+    job_id = "wf-" + str(uuid.uuid4())[:8]
+
+    try:
+        start = datetime.strptime(req.start_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(400, f"Invalid start_date: {req.start_date}")
+
+    if req.end_date:
+        try:
+            end = datetime.strptime(req.end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(400, f"Invalid end_date: {req.end_date}")
+    else:
+        end = date.today()
+
+    universe = req.universe
+    if "," in universe:
+        symbols: Any = [s.strip().upper() for s in universe.split(",") if s.strip()]
+    else:
+        symbols = universe
+
+    config = BacktestConfig(
+        symbols=symbols,
+        start_date=start,
+        end_date=end,
+        capital=req.capital,
+        risk_per_trade_pct=req.risk_pct,
+        max_open_positions=req.max_positions,
+        cost_model=req.cost_model,
+        top_n=req.top_n,
+        use_regime_filter=req.use_regime_filter,
+        benchmark=req.benchmark,
+    )
+
+    _jobs[job_id] = {
+        "status": "pending",
+        "progress_pct": 0,
+        "progress_msg": "Initialising walk-forward...",
+        "error": None,
+        "result": None,
+        "paths": None,
+        "config": {
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "universe": req.universe,
+            "capital": req.capital,
+            "train_months": req.train_months,
+            "test_months": req.test_months,
+        },
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "total_trades": 0,
+        "total_pnl": 0.0,
+        "win_rate_pct": 0.0,
+    }
+
+    thread = threading.Thread(
+        target=_run_walk_forward_job,
+        args=(job_id, config, req.train_months, req.test_months),
+        daemon=True,
+    )
+    thread.start()
+
+    return BacktestJobResponse(
+        job_id=job_id,
+        status="pending",
+        message=f"Walk-forward job {job_id} started. Poll /api/backtest/status/{job_id} for progress.",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════

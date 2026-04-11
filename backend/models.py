@@ -451,3 +451,28 @@ class LearningRecord(Base):
             f"<LearningRecord(id={self.id}, trade_id={self.trade_id}, "
             f"outcome={self.outcome_pnl_pct:.2f}%)>"
         )
+
+
+# ── User Settings (persistent key-value config) ───────────────────────
+
+class UserSettings(Base):
+    """Persistent key-value store for user configuration (e.g. capital).
+
+    Survives server restarts, unlike the in-memory Settings singleton.
+    """
+    __tablename__ = "user_settings"
+
+    key: Mapped[str] = mapped_column(
+        String(60), primary_key=True,
+    )
+    value: Mapped[str] = mapped_column(
+        Text, nullable=False,
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<UserSettings(key={self.key!r}, value={self.value!r})>"

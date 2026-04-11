@@ -36,10 +36,10 @@ logger = logging.getLogger(__name__)
 # Configuration constants
 # ---------------------------------------------------------------------------
 
-ROLLING_WINDOW_SESSIONS = 20
+ROLLING_WINDOW_SESSIONS = 50    # extended from 20 for more stable estimates
 DECAY_FACTOR = 0.9
-MAX_DAILY_DRIFT = 0.02          # +/- 2% per component per update
-MIN_SAMPLE_THRESHOLD = 10       # need at least this many trades to update a weight
+MAX_DAILY_DRIFT = 0.015         # reduced from 0.02 to slow down adaptation
+MIN_SAMPLE_THRESHOLD = 25       # increased from 10 to require more evidence
 WEIGHT_FLOOR = 0.02
 WEIGHT_CEILING = 0.40
 
@@ -304,6 +304,8 @@ class LearningEngine:
         else:
             base_weights = dict(current_weights)
 
+        old_weights = dict(base_weights)  # snapshot for audit trail
+
         # ---- Compute feature win-rate with exponential decay ------------
         feature_stats: Dict[str, Dict[str, float]] = defaultdict(
             lambda: {"weighted_wins": 0.0, "weighted_total": 0.0},
@@ -322,6 +324,10 @@ class LearningEngine:
         # ---- Compute desired drift per feature --------------------------
         changes: Dict[str, float] = {}
         reasoning_parts: List[str] = []
+        feature_attribution: Dict[str, Dict[str, float]] = {}
+
+        wins = [t for t in windowed if t.was_winner]
+        win_rate = len(wins) / len(windowed) * 100 if windowed else 0.0
 
         for feat, stats in feature_stats.items():
             if feat not in base_weights:
@@ -340,6 +346,13 @@ class LearningEngine:
             new_val = base_weights[feat] + clamped
             new_val = max(WEIGHT_FLOOR, min(WEIGHT_CEILING, new_val))
             actual_change = new_val - base_weights[feat]
+
+            feature_attribution[feat] = {
+                "win_ratio": round(win_ratio, 4),
+                "raw_delta": round(raw_delta, 6),
+                "clamped_delta": round(clamped, 6),
+                "applied_delta": round(actual_change, 6),
+            }
 
             if abs(actual_change) > 1e-6:
                 changes[feat] = round(actual_change, 6)
@@ -367,11 +380,87 @@ class LearningEngine:
             + (" | ".join(reasoning_parts) if reasoning_parts else "No significant drift.")
         )
 
+        # ---- Audit trail: write to WeightsHistory -----------------------
+        if changes:
+            self._write_audit_trail(
+                old_weights=old_weights,
+                new_weights=base_weights,
+                sample_size=len(windowed),
+                win_rate=round(win_rate, 2),
+                feature_attribution=feature_attribution,
+                regime=regime,
+                reasoning=reasoning,
+            )
+
         return UpdatedWeights(
             weights_dict=base_weights,
             changes_dict=changes,
             reasoning=reasoning,
         )
+
+    # ------------------------------------------------------------------
+    # Audit trail
+    # ------------------------------------------------------------------
+
+    def _write_audit_trail(
+        self,
+        old_weights: Dict[str, float],
+        new_weights: Dict[str, float],
+        sample_size: int,
+        win_rate: float,
+        feature_attribution: Dict[str, Dict[str, float]],
+        regime: Optional[str],
+        reasoning: str,
+    ) -> None:
+        """Write a row to the WeightsHistory table for every weight update.
+
+        Falls back to logging if the DB write fails (e.g. during backtests
+        where the async DB may not be available).
+        """
+        audit_notes = json.dumps({
+            "old_weights": old_weights,
+            "new_weights": new_weights,
+            "sample_size": sample_size,
+            "win_rate": win_rate,
+            "feature_attribution": feature_attribution,
+            "regime": regime,
+        }, default=str)
+
+        # Try async DB write via background thread
+        try:
+            import asyncio
+            from backend.database import AsyncSessionLocal
+            from backend.models import WeightsHistory
+
+            async def _persist():
+                async with AsyncSessionLocal() as session:
+                    wh = WeightsHistory(
+                        weights_json=json.dumps(new_weights),
+                        trigger="eod_learning",
+                        notes=audit_notes,
+                    )
+                    session.add(wh)
+                    await session.commit()
+
+            # If an event loop is running, schedule; otherwise run sync
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_persist())
+            except RuntimeError:
+                asyncio.run(_persist())
+
+            logger.info(
+                "Audit trail saved: sample_size=%d, win_rate=%.1f%%, "
+                "changes=%d factors, regime=%s",
+                sample_size, win_rate,
+                len(feature_attribution), regime or "global",
+            )
+        except Exception:
+            # Fallback: log the audit data so it's not lost
+            logger.warning(
+                "Could not write audit trail to DB, logging instead: %s",
+                audit_notes,
+            )
 
     # ------------------------------------------------------------------
     # Performance tracking

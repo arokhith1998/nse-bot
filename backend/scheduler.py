@@ -26,12 +26,20 @@ scheduler: Optional[AsyncIOScheduler] = None
 
 
 async def job_pre_market_scan() -> None:
-    """08:45 IST - Pre-market analysis: regime snapshot, universe filter, signal generation."""
+    """08:45 IST - Pre-market analysis: regime snapshot, news fetch, full universe scan."""
     logger.info("[scheduler] Running pre-market scan …")
     try:
-        from backend.modules.scanner import run_full_scan
-        summary = await run_full_scan()
-        logger.info("[scheduler] Pre-market scan complete: %s", summary)
+        from backend.modules.scanner import (
+            run_regime_scan, run_news_scan, run_premarket_full_scan,
+        )
+        # Regime first
+        regime = await run_regime_scan()
+        regime_label = regime.get("label", "RANGE_CHOP") if regime else "RANGE_CHOP"
+        # News
+        await run_news_scan()
+        # Full scan (scores all watchlist, caches top 100 for intraday)
+        count = await run_premarket_full_scan(regime_label)
+        logger.info("[scheduler] Pre-market scan complete: %d signals, regime=%s", count, regime_label)
     except Exception:
         logger.exception("[scheduler] Pre-market scan failed")
 
@@ -96,6 +104,34 @@ async def job_learning_run() -> None:
         logger.exception("[scheduler] Learning loop failed")
 
 
+async def job_weekly_watchlist() -> None:
+    """Sunday 20:00 IST - Rebuild the watchlist from the full NSE universe."""
+    logger.info("[scheduler] Rebuilding weekly watchlist …")
+    try:
+        import asyncio
+        from backend.backtester.data_loader import build_watchlist
+        from backend.modules.scanner import SCAN_UNIVERSE
+
+        watchlist = await asyncio.to_thread(build_watchlist)
+        # Update the scanner's universe with the fresh watchlist
+        SCAN_UNIVERSE.clear()
+        SCAN_UNIVERSE.extend(watchlist)
+        logger.info("[scheduler] Weekly watchlist rebuilt: %d symbols", len(watchlist))
+    except Exception:
+        logger.exception("[scheduler] Weekly watchlist rebuild failed")
+
+
+async def job_daily_movers() -> None:
+    """09:20 IST - Fetch daily top movers and merge into intraday scan universe."""
+    logger.info("[scheduler] Fetching daily movers …")
+    try:
+        from backend.modules.scanner import fetch_daily_movers
+        new_movers = await fetch_daily_movers()
+        logger.info("[scheduler] Daily movers: %d new symbols added", len(new_movers))
+    except Exception:
+        logger.exception("[scheduler] Daily movers fetch failed")
+
+
 async def job_eod_cleanup() -> None:
     """17:00 IST - End-of-day housekeeping."""
     logger.info("[scheduler] Running EOD cleanup …")
@@ -134,6 +170,16 @@ def _register_jobs(sched: AsyncIOScheduler) -> None:
         CronTrigger(hour=8, minute=45, day_of_week="mon-fri", timezone=_TZ),
         id="pre_market_scan",
         name="Pre-market scan (08:45 IST)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # Daily movers catch-net at 09:20 IST, Mon-Fri
+    sched.add_job(
+        job_daily_movers,
+        CronTrigger(hour=9, minute=20, day_of_week="mon-fri", timezone=_TZ),
+        id="daily_movers",
+        name="Daily movers catch-net (09:20 IST)",
         replace_existing=True,
         misfire_grace_time=300,
     )
@@ -200,6 +246,16 @@ def _register_jobs(sched: AsyncIOScheduler) -> None:
         name="EOD cleanup (17:00 IST)",
         replace_existing=True,
         misfire_grace_time=600,
+    )
+
+    # Weekly watchlist rebuild - Sunday 20:00 IST
+    sched.add_job(
+        job_weekly_watchlist,
+        CronTrigger(hour=20, minute=0, day_of_week="sun", timezone=_TZ),
+        id="weekly_watchlist",
+        name="Weekly watchlist rebuild (Sun 20:00 IST)",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
 
 

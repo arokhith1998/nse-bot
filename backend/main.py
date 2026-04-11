@@ -47,6 +47,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
     logger.info("Database initialised at %s", settings.resolved_db_path)
 
+    # Load persisted capital from DB (if any)
+    try:
+        from backend.database import AsyncSessionLocal
+        from backend.models import UserSettings
+        from sqlalchemy import select
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(UserSettings.value).where(UserSettings.key == "capital")
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                settings.capital = float(row)
+                logger.info("Loaded capital from DB: Rs %.0f", settings.capital)
+    except Exception:
+        logger.debug("No persisted capital found, using default: Rs %.0f", settings.capital)
+
     # Start the scheduler
     sched = None
     try:

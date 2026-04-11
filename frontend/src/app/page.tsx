@@ -85,6 +85,8 @@ export default function DashboardPage() {
         topPicks={picks?.top_picks ?? []}
         stretchPicks={picks?.stretch_picks ?? []}
         weights={picks?.weights}
+        advisory={picks?.advisory}
+        recommendedPickCount={picks?.recommended_pick_count}
       />
 
       {/* Main Grid: Trades + News | Risk */}
