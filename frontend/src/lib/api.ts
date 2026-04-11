@@ -114,7 +114,7 @@ export function updateSettings(
   patch: Partial<Settings>,
 ): Promise<Settings> {
   return fetchJSON<Settings>("/settings", {
-    method: "PATCH",
+    method: "PUT",
     body: JSON.stringify(patch),
   });
 }
