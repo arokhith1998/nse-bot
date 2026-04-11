@@ -150,6 +150,8 @@ from backend.api.frontend_api import router as frontend_router     # noqa: E402
 from backend.api.dashboard_api import router as dashboard_router  # noqa: E402
 from backend.api.webhook_routes import router as webhook_router    # noqa: E402
 from backend.api.backtest_routes import router as backtest_router  # noqa: E402
+from backend.api.etf_routes import router as etf_router            # noqa: E402
+from backend.api.simulator_routes import router as simulator_router # noqa: E402
 
 # Frontend-compatible routes first (match the frontend's expected paths/shapes)
 app.include_router(frontend_router)
@@ -157,6 +159,8 @@ app.include_router(frontend_router)
 app.include_router(dashboard_router)
 app.include_router(webhook_router)
 app.include_router(backtest_router)
+app.include_router(etf_router)
+app.include_router(simulator_router)
 
 
 # =====================================================================

@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, TrendingUp, Shield, IndianRupee, BarChart2, AlertTriangle, CheckCircle, ArrowRight } from "lucide-react";
+import { BookOpen, TrendingUp, Shield, IndianRupee, BarChart2, AlertTriangle, CheckCircle, ArrowRight, Layers, Calculator } from "lucide-react";
 
 function Section({ icon: Icon, title, children }: { icon: React.ElementType; title: string; children: React.ReactNode }) {
   return (
@@ -192,12 +192,80 @@ export default function GuidePage() {
         </div>
       </Section>
 
+      {/* ETF Picks */}
+      <Section icon={Layers} title="Understanding ETF Picks">
+        <p>
+          <strong className="text-ink">ETFs (Exchange-Traded Funds)</strong> are baskets of stocks that trade like a single stock.
+          For example, NIFTYBEES tracks the Nifty 50 index — buying 1 unit gives you exposure to all 50 stocks.
+        </p>
+        <p>
+          ETF trading is fundamentally different from stock picking. The platform uses a <strong className="text-ink">5-factor scoring model</strong> designed
+          specifically for ETFs:
+        </p>
+        <div className="overflow-x-auto mt-2">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-line text-left text-mute/70">
+                <th className="pb-2 pr-4 font-medium">Factor</th>
+                <th className="pb-2 pr-4 font-medium">Weight</th>
+                <th className="pb-2 font-medium">What It Measures</th>
+              </tr>
+            </thead>
+            <tbody className="text-mute">
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 text-accent font-medium">NAV Discount</td><td className="py-2 pr-4">35%</td><td className="py-2">Is the ETF trading below its fair value (NAV)? A discount means you&apos;re getting it cheap — it tends to revert back to NAV.</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 text-accent font-medium">Spread & Liquidity</td><td className="py-2 pr-4">20%</td><td className="py-2">How easy is it to buy/sell? Tighter bid-ask spread + higher volume = lower execution cost.</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 text-accent font-medium">Regime Alignment</td><td className="py-2 pr-4">25%</td><td className="py-2">Does the current market mood favor this ETF category? Index ETFs shine in uptrends, gold ETFs in downtrends.</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 text-accent font-medium">FII/DII Flow</td><td className="py-2 pr-4">15%</td><td className="py-2">Are big institutions (FIIs, DIIs) buying or selling? Positive flow = bullish signal for broad market ETFs.</td></tr>
+              <tr><td className="py-2 pr-4 text-accent font-medium">Time of Day</td><td className="py-2 pr-4">5%</td><td className="py-2">ETF liquidity varies during the day. Opening (9:15-10:00) and closing (2:30-3:30) windows are best.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          ETFs are grouped into 4 categories: <strong className="text-ink">Broad Index</strong> (NIFTYBEES, BANKBEES),{" "}
+          <strong className="text-ink">Sector</strong> (ITBEES, PHARMABEES),{" "}
+          <strong className="text-ink">Commodity</strong> (GOLDBEES, SILVERBEES), and{" "}
+          <strong className="text-ink">Liquid/Bond</strong> (LIQUIDBEES). Each category has adjusted scoring weights.
+        </p>
+      </Section>
+
+      {/* Simulator */}
+      <Section icon={Calculator} title="Using the Trade Simulator">
+        <p>
+          The <strong className="text-ink">Simulator</strong> lets you answer the question: <em>&quot;What if I had invested in this stock/ETF yesterday?&quot;</em>
+        </p>
+        <div className="space-y-3 mt-2">
+          <div className="flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+            <p>Pick any stock or ETF from the dropdown (you can filter by type and search by name)</p>
+          </div>
+          <div className="flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+            <p>Enter your capital — the simulator calculates how many shares you could buy</p>
+          </div>
+          <div className="flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+            <p>Entry price = previous day&apos;s closing price (realistic assumption)</p>
+          </div>
+          <div className="flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+            <p>See your <strong className="text-green-400">Net P&L at close</strong> (what you&apos;d make if you sold at today&apos;s close) and <strong className="text-green-400">Net P&L at day high</strong> (best-case scenario)</p>
+          </div>
+          <div className="flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+            <p>All trading charges are included: brokerage (Rs 20/side), STT, exchange fees, GST, SEBI fees, stamp duty</p>
+          </div>
+        </div>
+        <p className="mt-2 text-mute/70 text-xs">
+          This helps you build intuition about how much money you can realistically make (or lose) on a single-day trade, after all charges.
+        </p>
+      </Section>
+
       {/* Pages guide */}
       <Section icon={BarChart2} title="Platform Pages Explained">
         <div className="space-y-3">
           <div>
             <p className="text-ink font-medium">Dashboard</p>
-            <p>Your home screen. Shows today&apos;s picks, market regime, active trades, news, and risk gauges. Set your capital here.</p>
+            <p>Your home screen. Shows today&apos;s stock picks, market regime, active trades, news, and risk gauges. Set your capital here.</p>
           </div>
           <div>
             <p className="text-ink font-medium">Regime</p>
@@ -210,6 +278,14 @@ export default function GuidePage() {
           <div>
             <p className="text-ink font-medium">Performance</p>
             <p>Shows how the system has performed over time: win rate, profit factor, Sharpe ratio, and breakdown by setup type.</p>
+          </div>
+          <div>
+            <p className="text-ink font-medium">ETF Picks</p>
+            <p>Separate scoring engine for ETFs. Uses 5 ETF-specific factors (NAV discount, spread, regime alignment, institutional flows, time-of-day liquidity) instead of stock-style technical indicators.</p>
+          </div>
+          <div>
+            <p className="text-ink font-medium">Simulator</p>
+            <p>Pick any stock or ETF and see what your P&amp;L would have been if you had invested yesterday. Shows net P&amp;L at close and at day high, including all charges.</p>
           </div>
           <div>
             <p className="text-ink font-medium">Settings</p>
@@ -240,6 +316,14 @@ export default function GuidePage() {
           <div>
             <p className="text-ink font-medium">How much capital do I need to start?</p>
             <p>You can start paper trading with any amount. For real trading, Rs 10,000 is a reasonable minimum for intraday equity, though Rs 25,000-50,000 gives better diversification.</p>
+          </div>
+          <div>
+            <p className="text-ink font-medium">What&apos;s the difference between Stock Picks and ETF Picks?</p>
+            <p>Stock picks use technical indicators (trend, momentum, breakout, etc.) to find individual stocks. ETF picks use a completely different 5-factor model focused on NAV discount, spread quality, regime alignment, institutional flows, and time-of-day liquidity. ETFs trade differently from stocks — they&apos;re about mean reversion to NAV, not breakout patterns.</p>
+          </div>
+          <div>
+            <p className="text-ink font-medium">What does the Simulator show me?</p>
+            <p>The Simulator answers &quot;What if I had bought this stock/ETF yesterday?&quot; It shows your Net P&amp;L at today&apos;s close and at the day&apos;s highest price, including all trading charges. It helps you understand realistic profit expectations after costs.</p>
           </div>
         </div>
       </Section>

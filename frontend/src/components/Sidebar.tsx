@@ -10,6 +10,8 @@ import {
   Settings,
   BookOpen,
   ShieldAlert,
+  Layers,
+  Calculator,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -17,6 +19,8 @@ const NAV_ITEMS = [
   { href: "/regime", label: "Regime", icon: Gauge },
   { href: "/trades", label: "Trades", icon: ArrowLeftRight },
   { href: "/performance", label: "Performance", icon: BarChart2 },
+  { href: "/etf-picks", label: "ETF Picks", icon: Layers },
+  { href: "/simulator", label: "Simulator", icon: Calculator },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/guide", label: "Guide", icon: BookOpen },
 ] as const;

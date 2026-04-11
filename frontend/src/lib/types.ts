@@ -245,6 +245,89 @@ export interface CostCalcResult {
   breakeven_sell_price: number;
 }
 
+// ---- ETF Picks --------------------------------------------------------------
+
+export interface ETFScoreBreakdown {
+  nav_discount: number;
+  spread_liquidity: number;
+  regime_alignment: number;
+  fii_dii_flow: number;
+  time_of_day: number;
+}
+
+export interface ETFPick {
+  symbol: string;
+  name: string;
+  category: string;
+  ltp: number;
+  nav: number;
+  nav_discount_pct: number;
+  spread_pct: number;
+  volume: number;
+  avg_volume: number;
+  score: number;
+  breakdown: ETFScoreBreakdown;
+  bias: "LONG" | "SHORT";
+  entry: number;
+  stop_loss: number;
+  target: number;
+  qty: number;
+  capital_needed: number;
+  fits_budget: boolean;
+  net_rr: number;
+  notes: string[];
+}
+
+export interface ETFPicksResponse {
+  generated_at: string;
+  trade_for: string;
+  universe_size: number;
+  scored: number;
+  weights: Record<string, number>;
+  top_picks: ETFPick[];
+  stretch_picks: ETFPick[];
+  advisory: string[];
+  recommended_pick_count: number;
+  regime: string;
+  disclaimer: string;
+}
+
+// ---- Simulator --------------------------------------------------------------
+
+export interface SimulatorSymbol {
+  symbol: string;
+  name: string;
+  type: "stock" | "etf";
+}
+
+export interface SimulatorResult {
+  symbol: string;
+  name: string;
+  instrument_type: string;
+  prev_close: number;
+  day_open: number;
+  day_high: number;
+  day_low: number;
+  day_close: number;
+  entry_price: number;
+  qty: number;
+  invested: number;
+  close_value: number;
+  close_pnl: number;
+  close_pnl_pct: number;
+  close_charges: number;
+  close_net_pnl: number;
+  high_value: number;
+  high_pnl: number;
+  high_pnl_pct: number;
+  high_charges: number;
+  high_net_pnl: number;
+  volume: number;
+  avg_volume: number;
+  data_available: boolean;
+  notes: string[];
+}
+
 export interface WebSocketMessage {
   type:
     | "price_update"

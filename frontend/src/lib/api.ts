@@ -119,6 +119,33 @@ export function updateSettings(
   });
 }
 
+// ---- ETF Picks ------------------------------------------------------------
+
+import type { ETFPicksResponse, SimulatorResult, SimulatorSymbol } from "./types";
+
+export function fetchETFPicks(): Promise<ETFPicksResponse> {
+  return fetchJSON<ETFPicksResponse>("/etf-picks");
+}
+
+// ---- Simulator ------------------------------------------------------------
+
+export function fetchSimulatorSymbols(
+  type: "stock" | "etf" | "all" = "all",
+): Promise<{ symbols: SimulatorSymbol[]; count: number }> {
+  return fetchJSON(`/simulator/symbols?type=${type}`);
+}
+
+export function simulateTrade(params: {
+  symbol: string;
+  capital: number;
+  instrument_type: string;
+}): Promise<SimulatorResult> {
+  return fetchJSON<SimulatorResult>("/simulator/simulate", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
 // ---- Groww Cost Calculator ------------------------------------------------
 
 import type { CostCalcResult } from "./types";
