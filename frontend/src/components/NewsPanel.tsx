@@ -57,8 +57,8 @@ export default function NewsPanel({ news, loading = false }: NewsPanelProps) {
     const q = filter.toUpperCase();
     return news.filter(
       (item) =>
-        item.symbol.includes(q) ||
-        item.headline.toLowerCase().includes(filter.toLowerCase()),
+        (item.symbol ?? "").includes(q) ||
+        (item.headline ?? "").toLowerCase().includes(filter.toLowerCase()),
     );
   }, [news, filter]);
 
@@ -116,7 +116,7 @@ export default function NewsPanel({ news, loading = false }: NewsPanelProps) {
             {/* Content */}
             <div className="flex-1 min-w-0">
               <p className="text-xs text-ink/90 leading-relaxed line-clamp-2">
-                {item.headline.replace(/<[^>]*>/g, "").substring(0, 200)}
+                {(item.headline ?? "").replace(/<[^>]*>/g, "").substring(0, 200)}
               </p>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-[10px] text-mute">{item.source}</span>

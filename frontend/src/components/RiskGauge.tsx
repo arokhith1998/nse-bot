@@ -102,7 +102,7 @@ export default function RiskGauge({ risk, loading = false }: RiskGaugeProps) {
       </div>
 
       {/* Sector Concentration */}
-      {Object.keys(risk.sector_exposure).length > 0 && (
+      {Object.keys(risk.sector_exposure ?? {}).length > 0 && (
         <div className="mt-4">
           <div className="flex items-center gap-2 mb-2">
             <PieChart className="w-3.5 h-3.5 text-mute" />
@@ -111,7 +111,7 @@ export default function RiskGauge({ risk, loading = false }: RiskGaugeProps) {
             </span>
           </div>
           <div className="space-y-2">
-            {Object.entries(risk.sector_exposure)
+            {Object.entries(risk.sector_exposure ?? {})
               .sort(([, a], [, b]) => b - a)
               .slice(0, 6)
               .map(([sector, pct]) => (

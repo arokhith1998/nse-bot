@@ -151,14 +151,14 @@ export default function PerformancePage() {
               </span>
               <div
                 className={`text-lg font-semibold font-mono mt-0.5 ${
-                  perf.sharpe_ratio >= 1
+                  (perf.sharpe_ratio ?? 0) >= 1
                     ? "text-green"
-                    : perf.sharpe_ratio >= 0
+                    : (perf.sharpe_ratio ?? 0) >= 0
                       ? "text-yellow"
                       : "text-red"
                 }`}
               >
-                {perf.sharpe_ratio.toFixed(2)}
+                {(perf.sharpe_ratio ?? 0).toFixed(2)}
               </div>
             </div>
             <div className="bg-card-alt border border-line rounded-lg p-3">
@@ -166,7 +166,7 @@ export default function PerformancePage() {
                 Avg R:R Achieved
               </span>
               <div className="text-lg font-semibold font-mono text-accent mt-0.5">
-                {perf.avg_rr_achieved.toFixed(2)}
+                {(perf.avg_rr_achieved ?? 0).toFixed(2)}
               </div>
             </div>
           </div>

@@ -16,9 +16,9 @@ export default function LayoutShell({
   const headerRegime = regime
     ? {
         label: regime.label,
-        vix: regime.vix,
-        nifty_close: regime.nifty_close,
-        nifty_change_pct: regime.nifty_change_pct,
+        vix: regime.vix ?? 0,
+        nifty_close: regime.nifty_close ?? 0,
+        nifty_change_pct: regime.nifty_change_pct ?? 0,
       }
     : null;
 

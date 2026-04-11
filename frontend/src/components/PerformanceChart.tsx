@@ -98,24 +98,24 @@ export default function PerformanceChart({
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <KpiCard
             label="Win Rate"
-            value={`${performance.win_rate.toFixed(1)}%`}
-            color={performance.win_rate >= 50 ? "text-green" : "text-red"}
+            value={`${(performance.win_rate ?? 0).toFixed(1)}%`}
+            color={(performance.win_rate ?? 0) >= 50 ? "text-green" : "text-red"}
           />
           <KpiCard
             label="Profit Factor"
-            value={performance.profit_factor.toFixed(2)}
+            value={(performance.profit_factor ?? 0).toFixed(2)}
             color={
-              performance.profit_factor >= 1.5 ? "text-green" : "text-yellow"
+              (performance.profit_factor ?? 0) >= 1.5 ? "text-green" : "text-yellow"
             }
           />
           <KpiCard
             label="Total P&L"
-            value={formatCurrency(performance.total_pnl)}
-            color={performance.total_pnl >= 0 ? "text-green" : "text-red"}
+            value={formatCurrency(performance.total_pnl ?? 0)}
+            color={(performance.total_pnl ?? 0) >= 0 ? "text-green" : "text-red"}
           />
           <KpiCard
             label="Max Drawdown"
-            value={formatPct(performance.max_drawdown)}
+            value={formatPct(performance.max_drawdown ?? 0)}
             color="text-red"
           />
         </div>

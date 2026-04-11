@@ -89,21 +89,21 @@ function ExpandedRow({
               <div className="flex justify-between">
                 <span className="text-mute">Stoch %K</span>
                 <span className="font-mono text-ink">
-                  {pick.stoch_k.toFixed(1)}
+                  {(pick.stoch_k ?? 0).toFixed(1)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-mute">BB Position</span>
                 <span className="font-mono text-ink">
-                  {pick.bb_position.toFixed(2)}
+                  {(pick.bb_position ?? 0).toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-mute">Gap %</span>
                 <span
-                  className={`font-mono ${pick.gap_pct > 0 ? "text-green" : pick.gap_pct < 0 ? "text-red" : "text-ink"}`}
+                  className={`font-mono ${(pick.gap_pct ?? 0) > 0 ? "text-green" : (pick.gap_pct ?? 0) < 0 ? "text-red" : "text-ink"}`}
                 >
-                  {pick.gap_pct.toFixed(2)}%
+                  {(pick.gap_pct ?? 0).toFixed(2)}%
                 </span>
               </div>
             </div>
@@ -118,33 +118,33 @@ function ExpandedRow({
               <div className="flex justify-between">
                 <span className="text-mute">Vol Ratio</span>
                 <span
-                  className={`font-mono ${pick.vol_ratio > 2 ? "text-green" : "text-ink"}`}
+                  className={`font-mono ${(pick.vol_ratio ?? 0) > 2 ? "text-green" : "text-ink"}`}
                 >
-                  {pick.vol_ratio.toFixed(2)}x
+                  {(pick.vol_ratio ?? 0).toFixed(2)}x
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-mute">ATR %</span>
                 <span className="font-mono text-ink">
-                  {pick.atr_pct.toFixed(2)}%
+                  {(pick.atr_pct ?? 0).toFixed(2)}%
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-mute">5D Return</span>
                 <span
-                  className={`font-mono ${pick.ret5d_pct > 0 ? "text-green" : "text-red"}`}
+                  className={`font-mono ${(pick.ret5d_pct ?? 0) > 0 ? "text-green" : "text-red"}`}
                 >
-                  {pick.ret5d_pct > 0 ? "+" : ""}
-                  {pick.ret5d_pct.toFixed(2)}%
+                  {(pick.ret5d_pct ?? 0) > 0 ? "+" : ""}
+                  {(pick.ret5d_pct ?? 0).toFixed(2)}%
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-mute">20D Return</span>
                 <span
-                  className={`font-mono ${pick.ret20d_pct > 0 ? "text-green" : "text-red"}`}
+                  className={`font-mono ${(pick.ret20d_pct ?? 0) > 0 ? "text-green" : "text-red"}`}
                 >
-                  {pick.ret20d_pct > 0 ? "+" : ""}
-                  {pick.ret20d_pct.toFixed(2)}%
+                  {(pick.ret20d_pct ?? 0) > 0 ? "+" : ""}
+                  {(pick.ret20d_pct ?? 0).toFixed(2)}%
                 </span>
               </div>
             </div>
@@ -370,7 +370,7 @@ function PicksSection({
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex flex-wrap gap-1">
-                        {pick.strategy.split("/").map((s) => (
+                        {(pick.strategy ?? "").split("/").map((s) => (
                           <span
                             key={s}
                             className="px-1.5 py-0.5 text-[10px] rounded bg-card-alt border border-line text-mute"
@@ -393,7 +393,7 @@ function PicksSection({
                       {pick.qty}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-xs text-right font-semibold text-accent">
-                      {pick.net_rr.toFixed(2)}
+                      {(pick.net_rr ?? 0).toFixed(2)}
                     </td>
                   </tr>
                   {expanded && (

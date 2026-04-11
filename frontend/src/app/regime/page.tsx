@@ -98,7 +98,12 @@ export default function RegimePage() {
               </thead>
               <tbody>
                 {history.map((r, i) => {
-                  const cfg = REGIME_CONFIG[r.label];
+                  const cfg = REGIME_CONFIG[r.label] ?? { label: r.label, color: "text-mute", bg: "bg-mute/15" };
+                  const vix = r.vix ?? 0;
+                  const niftyClose = r.nifty_close ?? 0;
+                  const niftyChangePct = r.nifty_change_pct ?? 0;
+                  const breadthPct = r.breadth_pct ?? 0;
+                  const scoringMod = r.scoring_modifier ?? 0;
                   return (
                     <tr
                       key={i}
@@ -115,40 +120,40 @@ export default function RegimePage() {
                         </span>
                       </td>
                       <td className="px-3 py-2 text-xs font-mono text-ink text-right">
-                        {r.nifty_close.toLocaleString("en-IN")}
+                        {niftyClose.toLocaleString("en-IN")}
                       </td>
                       <td
                         className={`px-3 py-2 text-xs font-mono text-right ${
-                          r.nifty_change_pct >= 0 ? "text-green" : "text-red"
+                          niftyChangePct >= 0 ? "text-green" : "text-red"
                         }`}
                       >
-                        {formatPct(r.nifty_change_pct)}
+                        {formatPct(niftyChangePct)}
                       </td>
                       <td
                         className={`px-3 py-2 text-xs font-mono text-right ${
-                          r.vix > 20
+                          vix > 20
                             ? "text-red"
-                            : r.vix > 15
+                            : vix > 15
                               ? "text-yellow"
                               : "text-green"
                         }`}
                       >
-                        {r.vix.toFixed(1)}
+                        {vix.toFixed(1)}
                       </td>
                       <td className="px-3 py-2 text-xs font-mono text-ink text-right">
-                        {r.breadth_pct.toFixed(0)}%
+                        {breadthPct.toFixed(0)}%
                       </td>
                       <td
                         className={`px-3 py-2 text-xs font-mono text-right ${
-                          r.scoring_modifier > 0
+                          scoringMod > 0
                             ? "text-green"
-                            : r.scoring_modifier < 0
+                            : scoringMod < 0
                               ? "text-red"
                               : "text-mute"
                         }`}
                       >
-                        {r.scoring_modifier > 0 ? "+" : ""}
-                        {r.scoring_modifier}
+                        {scoringMod > 0 ? "+" : ""}
+                        {scoringMod}
                       </td>
                     </tr>
                   );

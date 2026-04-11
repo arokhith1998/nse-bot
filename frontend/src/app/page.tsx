@@ -32,7 +32,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchNews()
-      .then((data) => setNews(data.items))
+      .then((data) => setNews(Array.isArray(data?.items) ? data.items : []))
       .catch(() => setNews([]))
       .finally(() => setNewsLoading(false));
 

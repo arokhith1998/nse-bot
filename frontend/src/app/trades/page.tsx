@@ -33,10 +33,10 @@ export default function TradesPage() {
 
   const filtered = useMemo(() => {
     return history.filter((t) => {
-      if (symbolFilter && !t.symbol.includes(symbolFilter.toUpperCase()))
+      if (symbolFilter && !(t.symbol ?? "").includes(symbolFilter.toUpperCase()))
         return false;
       if (resultFilter && t.result !== resultFilter) return false;
-      if (setupFilter && !t.setup.includes(setupFilter)) return false;
+      if (setupFilter && !(t.setup ?? "").includes(setupFilter)) return false;
       return true;
     });
   }, [history, symbolFilter, resultFilter, setupFilter]);
@@ -44,7 +44,7 @@ export default function TradesPage() {
   const stats = useMemo(() => {
     if (filtered.length === 0) return null;
     const wins = filtered.filter((t) => t.result === "WIN").length;
-    const totalPnl = filtered.reduce((s, t) => s + t.pnl, 0);
+    const totalPnl = filtered.reduce((s, t) => s + (t.pnl ?? 0), 0);
     return {
       total: filtered.length,
       wins,
@@ -55,7 +55,7 @@ export default function TradesPage() {
   }, [filtered]);
 
   const setups = useMemo(
-    () => [...new Set(history.map((t) => t.setup))].sort(),
+    () => [...new Set(history.map((t) => t.setup ?? ""))].filter(Boolean).sort(),
     [history],
   );
 
@@ -236,12 +236,12 @@ export default function TradesPage() {
                       {t.qty}
                     </td>
                     <td
-                      className={`px-3 py-2 text-xs font-mono font-semibold ${t.pnl >= 0 ? "text-green" : "text-red"}`}
+                      className={`px-3 py-2 text-xs font-mono font-semibold ${(t.pnl ?? 0) >= 0 ? "text-green" : "text-red"}`}
                     >
-                      {formatCurrency(t.pnl)}
+                      {formatCurrency(t.pnl ?? 0)}
                     </td>
                     <td
-                      className={`px-3 py-2 text-xs font-mono ${t.pnl_pct >= 0 ? "text-green" : "text-red"}`}
+                      className={`px-3 py-2 text-xs font-mono ${(t.pnl_pct ?? 0) >= 0 ? "text-green" : "text-red"}`}
                     >
                       {formatPct(t.pnl_pct)}
                     </td>
