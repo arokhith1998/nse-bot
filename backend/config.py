@@ -150,19 +150,23 @@ class Settings(BaseSettings):
 def pick_count_for_capital(capital: float) -> int:
     """Return recommended number of picks based on available capital.
 
-    Scales from 2 (very low capital) to 10 (high capital).
+    Scales from 3 (very low capital) to 12 (high capital).
     """
-    if capital <= 10_000:
-        return 2
-    if capital <= 25_000:
+    if capital <= 1_000:
         return 3
-    if capital <= 50_000:
+    if capital <= 5_000:
         return 5
-    if capital <= 100_000:
+    if capital <= 10_000:
         return 6
-    if capital <= 200_000:
+    if capital <= 25_000:
+        return 7
+    if capital <= 50_000:
         return 8
-    return 10
+    if capital <= 100_000:
+        return 9
+    if capital <= 200_000:
+        return 10
+    return 12
 
 
 # Singleton – import this everywhere.

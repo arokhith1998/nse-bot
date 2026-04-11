@@ -49,7 +49,7 @@ export default function DashboardPage() {
 
   const handleCapitalSubmit = useCallback(async () => {
     const val = Number(capitalInput);
-    if (isNaN(val) || val < 1000) return;
+    if (isNaN(val) || val < 100) return;
     setCapitalSaving(true);
     try {
       await updateSettings({ capital: val });
@@ -85,7 +85,7 @@ export default function DashboardPage() {
               </span>
               <input
                 type="number"
-                min={1000}
+                min={100}
                 step={1000}
                 value={capitalInput}
                 onChange={(e) => setCapitalInput(e.target.value)}
@@ -104,7 +104,7 @@ export default function DashboardPage() {
             </button>
           </div>
           <span className="text-[10px] text-mute/60 hidden sm:inline">
-            Picks scale with capital: 2 for 10K | 5 for 50K | 10 for 2L+
+            Picks scale with capital: 3 for 1K | 5 for 5K | 8 for 50K | 12 for 2L+
           </span>
         </div>
       </div>

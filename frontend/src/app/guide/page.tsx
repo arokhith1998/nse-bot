@@ -146,12 +146,14 @@ export default function GuidePage() {
               </tr>
             </thead>
             <tbody className="text-mute">
-              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Up to Rs 10,000</td><td className="py-2 pr-4">2 picks</td><td className="py-2">Small capital = focus on your best bets only</td></tr>
-              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 10K - 25K</td><td className="py-2 pr-4">3 picks</td><td className="py-2">Enough for a few well-sized positions</td></tr>
-              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 25K - 50K</td><td className="py-2 pr-4">5 picks</td><td className="py-2">Good diversification without over-spreading</td></tr>
-              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 50K - 1 Lakh</td><td className="py-2 pr-4">6 picks</td><td className="py-2">Standard portfolio size</td></tr>
-              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 1L - 2 Lakh</td><td className="py-2 pr-4">8 picks</td><td className="py-2">Well-diversified across sectors</td></tr>
-              <tr><td className="py-2 pr-4 font-medium">Rs 2 Lakh+</td><td className="py-2 pr-4">10 picks</td><td className="py-2">Maximum diversification</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Up to Rs 1,000</td><td className="py-2 pr-4">3 picks</td><td className="py-2">Start small, focus on your top bets</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 1K - 5K</td><td className="py-2 pr-4">5 picks</td><td className="py-2">Enough for a few well-sized positions</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 5K - 10K</td><td className="py-2 pr-4">6 picks</td><td className="py-2">Good diversification without over-spreading</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 10K - 25K</td><td className="py-2 pr-4">7 picks</td><td className="py-2">Solid portfolio spread</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 25K - 50K</td><td className="py-2 pr-4">8 picks</td><td className="py-2">Standard diversified portfolio</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 50K - 1 Lakh</td><td className="py-2 pr-4">9 picks</td><td className="py-2">Wide sector coverage</td></tr>
+              <tr className="border-b border-line/50"><td className="py-2 pr-4 font-medium">Rs 1L - 2 Lakh</td><td className="py-2 pr-4">10 picks</td><td className="py-2">Well-diversified across sectors</td></tr>
+              <tr><td className="py-2 pr-4 font-medium">Rs 2 Lakh+</td><td className="py-2 pr-4">12 picks</td><td className="py-2">Maximum diversification</td></tr>
             </tbody>
           </table>
         </div>
