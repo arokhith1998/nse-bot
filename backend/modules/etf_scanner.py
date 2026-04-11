@@ -434,18 +434,23 @@ def score_etf(
 # Scan all ETFs
 # ---------------------------------------------------------------------------
 
-async def scan_etf_universe(
-    regime_label: str = "RANGE_BOUND",
-    regime_modifier: float = 1.0,
-    fii_net: float = 0.0,
-    dii_net: float = 0.0,
-) -> List[ETFPick]:
-    """Scan all ETFs in the universe and return scored picks.
+# Top liquid ETFs to scan (most traded, avoids 51-ETF timeout)
+_LIQUID_ETFS = [
+    "NIFTYBEES", "BANKBEES", "JUNIORBEES", "ITBEES", "GOLDBEES",
+    "SILVERBEES", "SETFNIFTY", "ICICIN50", "PSUBNKBEES", "LIQUIDBEES",
+    "MIDCAPETF", "NEXT50", "PHARMABEES", "SETFGOLD", "CPSEETF",
+    "LOWVOL1", "NV20", "MOM50", "INFRAES", "AUTOBEES",
+]
 
-    Uses yfinance for price data. NAV is approximated from previous close
-    (true iNAV would require NSE's real-time iNAV feed which isn't publicly
-    available via free APIs).
-    """
+
+def _scan_etfs_sync(
+    regime_label: str,
+    regime_modifier: float,
+    fii_net: float,
+    dii_net: float,
+) -> List[ETFPick]:
+    """Synchronous ETF scan — runs in a thread to avoid blocking the event loop."""
+    import asyncio
     from backend.modules.etf_universe import ETF_UNIVERSE, ETFCategory
     from backend.modules.market_data_provider import CompositeProvider
 
@@ -459,59 +464,80 @@ async def scan_etf_universe(
         ETFCategory.LIQUID_BOND: "liquid_bond",
     }
 
+    # Build a lookup: symbol → (category_str, name)
+    sym_lookup: Dict[str, tuple] = {}
     for cat, etfs in ETF_UNIVERSE.items():
         cat_str = category_map.get(cat, "broad_index")
         for etf_info in etfs:
-            symbol = etf_info["symbol"]
-            name = etf_info["name"]
+            sym_lookup[etf_info["symbol"]] = (cat_str, etf_info["name"])
 
-            try:
-                quote = provider.get_quote(symbol)
-                if quote is None or quote.ltp <= 0:
-                    continue
+    # Only scan liquid ETFs to keep it fast
+    for symbol in _LIQUID_ETFS:
+        if symbol not in sym_lookup:
+            continue
+        cat_str, name = sym_lookup[symbol]
 
-                # Get history for avg volume
-                hist = provider.get_history(symbol, days=20, interval="1d")
-                avg_vol = 0
-                if hist is not None and "Volume" in hist.columns and len(hist) > 5:
-                    avg_vol = int(hist["Volume"].mean())
-
-                # NAV approximation: use previous close as proxy for iNAV
-                # Real iNAV would come from AMC/NSE feed
-                nav_approx = quote.close if quote.close > 0 else quote.ltp
-
-                # Spread from bid/ask
-                spread = 0.0
-                if quote.bid > 0 and quote.ask > 0:
-                    spread = (quote.ask - quote.bid) / quote.ltp * 100
-                elif quote.ltp > 0:
-                    # Estimate spread from daily range if no bid/ask
-                    if quote.high > 0 and quote.low > 0:
-                        spread = min(0.5, (quote.high - quote.low) / quote.ltp * 100 * 0.1)
-                    else:
-                        spread = 0.15  # default estimate
-
-                pick = score_etf(
-                    symbol=symbol,
-                    name=name,
-                    category=cat_str,
-                    ltp=quote.ltp,
-                    nav=nav_approx,
-                    spread_pct=spread,
-                    volume=quote.volume,
-                    avg_volume=avg_vol,
-                    regime_label=regime_label,
-                    regime_modifier=regime_modifier,
-                    fii_net=fii_net,
-                    dii_net=dii_net,
-                )
-                picks.append(pick)
-
-            except Exception as exc:
-                logger.warning("ETF scan failed for %s: %s", symbol, exc)
+        try:
+            quote = provider.get_quote(symbol)
+            if quote is None or quote.ltp <= 0:
                 continue
 
-    # Sort by score descending
+            # Get history for avg volume
+            hist = provider.get_history(symbol, days=20, interval="1d")
+            avg_vol = 0
+            if hist is not None and "Volume" in hist.columns and len(hist) > 5:
+                avg_vol = int(hist["Volume"].mean())
+
+            # NAV approximation: use previous close as proxy for iNAV
+            nav_approx = quote.close if quote.close > 0 else quote.ltp
+
+            # Spread from bid/ask
+            spread = 0.0
+            if quote.bid > 0 and quote.ask > 0:
+                spread = (quote.ask - quote.bid) / quote.ltp * 100
+            elif quote.ltp > 0:
+                if quote.high > 0 and quote.low > 0:
+                    spread = min(0.5, (quote.high - quote.low) / quote.ltp * 100 * 0.1)
+                else:
+                    spread = 0.15
+
+            pick = score_etf(
+                symbol=symbol,
+                name=name,
+                category=cat_str,
+                ltp=quote.ltp,
+                nav=nav_approx,
+                spread_pct=spread,
+                volume=quote.volume,
+                avg_volume=avg_vol,
+                regime_label=regime_label,
+                regime_modifier=regime_modifier,
+                fii_net=fii_net,
+                dii_net=dii_net,
+            )
+            picks.append(pick)
+
+        except Exception as exc:
+            logger.warning("ETF scan failed for %s: %s", symbol, exc)
+            continue
+
     picks.sort(key=lambda p: p.score, reverse=True)
     logger.info("ETF scan complete: %d ETFs scored", len(picks))
     return picks
+
+
+async def scan_etf_universe(
+    regime_label: str = "RANGE_BOUND",
+    regime_modifier: float = 1.0,
+    fii_net: float = 0.0,
+    dii_net: float = 0.0,
+) -> List[ETFPick]:
+    """Scan top liquid ETFs and return scored picks.
+
+    Runs the synchronous yfinance calls in a thread so it doesn't block
+    the FastAPI event loop (which would freeze all other endpoints).
+    """
+    import asyncio
+    return await asyncio.to_thread(
+        _scan_etfs_sync, regime_label, regime_modifier, fii_net, dii_net,
+    )

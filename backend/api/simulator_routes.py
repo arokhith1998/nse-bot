@@ -93,6 +93,16 @@ async def get_simulator_symbols(
     return {"symbols": symbols, "count": len(symbols)}
 
 
+def _fetch_sim_data(symbol: str) -> Optional[dict]:
+    """Fetch quote + history synchronously (runs in thread)."""
+    from backend.modules.market_data_provider import CompositeProvider
+    provider = CompositeProvider()
+    hist = provider.get_history(symbol, days=10, interval="1d")
+    if hist is None or len(hist) < 2:
+        return None
+    return {"hist": hist}
+
+
 @router.post("/api/simulator/simulate")
 async def simulate_trade(req: SimulatorRequest) -> Dict[str, Any]:
     """Simulate a trade: what if you bought at previous day's close?
@@ -100,9 +110,8 @@ async def simulate_trade(req: SimulatorRequest) -> Dict[str, Any]:
     Uses the previous trading day's close as entry price, and shows
     P&L at the current/latest day's close and day high.
     """
-    from backend.modules.market_data_provider import CompositeProvider
+    import asyncio
 
-    provider = CompositeProvider()
     symbol = req.symbol.upper()
     capital = req.capital
     notes: List[str] = []
@@ -120,8 +129,12 @@ async def simulate_trade(req: SimulatorRequest) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Get historical data (last 5 days to find prev trading day)
-    hist = provider.get_history(symbol, days=10, interval="1d")
+    # Fetch data in a thread so we don't block the event loop
+    data = await asyncio.to_thread(_fetch_sim_data, symbol)
+    if data is None:
+        hist = None
+    else:
+        hist = data["hist"]
     if hist is None or len(hist) < 2:
         return {
             "symbol": symbol,
