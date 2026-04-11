@@ -172,8 +172,9 @@ async def get_regime(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
         }
 
-    # Map DB regime labels to frontend labels
+    # Map DB regime labels to frontend labels (handle both uppercase and lowercase)
     label_map = {
+        # Uppercase variants
         "TREND_UP": "TRENDING_UP",
         "TREND_DOWN": "TRENDING_DOWN",
         "RANGE_CHOP": "RANGE_BOUND",
@@ -181,6 +182,15 @@ async def get_regime(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
         "GAP_AND_GO": "RISK_ON",
         "GAP_FILL": "RANGE_BOUND",
         "LOW_LIQ_DRIFT": "EXHAUSTION",
+        # Lowercase enum .value variants (from RegimeEngine)
+        "trend_up": "TRENDING_UP",
+        "trend_down": "TRENDING_DOWN",
+        "range_chop": "RANGE_BOUND",
+        "high_vol_event": "HIGH_VOL",
+        "gap_and_go": "RISK_ON",
+        "gap_fill": "RANGE_BOUND",
+        "low_liq_drift": "EXHAUSTION",
+        # Legacy labels
         "risk_on": "RISK_ON",
         "risk_off": "RISK_OFF",
         "trending_bull": "TRENDING_UP",
@@ -213,10 +223,10 @@ async def get_regime(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
     return {
         "label": label,
         "description": descriptions.get(label, f"Current regime: {label}"),
-        "nifty_close": 0,
-        "nifty_change_pct": 0,
-        "sensex_close": 0,
-        "sensex_change_pct": 0,
+        "nifty_close": getattr(snap, 'nifty_close', None) or 0,
+        "nifty_change_pct": getattr(snap, 'nifty_change_pct', None) or 0,
+        "sensex_close": getattr(snap, 'sensex_close', None) or 0,
+        "sensex_change_pct": getattr(snap, 'sensex_change_pct', None) or 0,
         "vix": snap.vix,
         "vix_change_pct": 0,
         "advance_decline_ratio": snap.advance_decline,
@@ -256,6 +266,13 @@ async def get_regime_history(
         "GAP_AND_GO": "RISK_ON",
         "GAP_FILL": "RANGE_BOUND",
         "LOW_LIQ_DRIFT": "EXHAUSTION",
+        "trend_up": "TRENDING_UP",
+        "trend_down": "TRENDING_DOWN",
+        "range_chop": "RANGE_BOUND",
+        "high_vol_event": "HIGH_VOL",
+        "gap_and_go": "RISK_ON",
+        "gap_fill": "RANGE_BOUND",
+        "low_liq_drift": "EXHAUSTION",
     }
 
     history = []
@@ -264,10 +281,10 @@ async def get_regime_history(
         history.append({
             "label": label,
             "description": f"VIX: {s.vix:.1f}, Breadth: {s.breadth_pct:.0f}%",
-            "nifty_close": 0,
-            "nifty_change_pct": 0,
-            "sensex_close": 0,
-            "sensex_change_pct": 0,
+            "nifty_close": getattr(s, 'nifty_close', None) or 0,
+            "nifty_change_pct": getattr(s, 'nifty_change_pct', None) or 0,
+            "sensex_close": getattr(s, 'sensex_close', None) or 0,
+            "sensex_change_pct": getattr(s, 'sensex_change_pct', None) or 0,
             "vix": s.vix,
             "vix_change_pct": 0,
             "advance_decline_ratio": s.advance_decline,

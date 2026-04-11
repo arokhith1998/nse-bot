@@ -239,6 +239,22 @@ class RegimeSnapshot(Base):
         Float, nullable=False, default=0.0,
         comment="Regime classification confidence 0-1.",
     )
+    nifty_close: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=0.0,
+        comment="Nifty 50 closing price.",
+    )
+    nifty_change_pct: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=0.0,
+        comment="Nifty 50 daily change percent.",
+    )
+    sensex_close: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=0.0,
+        comment="BSE Sensex closing price.",
+    )
+    sensex_change_pct: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=0.0,
+        comment="BSE Sensex daily change percent.",
+    )
 
     def __repr__(self) -> str:
         return (

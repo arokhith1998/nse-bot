@@ -69,6 +69,10 @@ async def run_regime_scan() -> Optional[Dict]:
                 regime_label=regime_data.get("label", "RANGE_CHOP"),
                 sub_regime=regime_data.get("sub_regime"),
                 confidence=regime_data.get("confidence", 0.5),
+                nifty_close=regime_data.get("nifty_close", 0.0),
+                nifty_change_pct=regime_data.get("nifty_change_pct", 0.0),
+                sensex_close=regime_data.get("sensex_close", 0.0),
+                sensex_change_pct=regime_data.get("sensex_change_pct", 0.0),
             )
             session.add(snapshot)
             await session.commit()
@@ -85,6 +89,8 @@ def _classify_regime() -> Optional[Dict]:
     """Synchronous regime classification wrapper."""
     try:
         from backend.modules.regime_engine import RegimeEngine
+        import yfinance as yf
+
         engine = RegimeEngine()
         state = engine.classify()
 
@@ -122,6 +128,45 @@ def _classify_regime() -> Optional[Dict]:
             else:
                 data["nifty_trend"] = "sideways"
             data["bank_nifty_trend"] = data["nifty_trend"]  # approximation
+
+            # ── Fetch Nifty & Sensex prices ──────────────────────────
+            try:
+                idx = yf.download("^NSEI ^BSESN", period="5d",
+                                  group_by="ticker", progress=False, threads=True)
+                if idx is not None and not idx.empty:
+                    # Nifty 50
+                    try:
+                        nifty_df = idx["^NSEI"].dropna()
+                        if len(nifty_df) >= 2:
+                            data["nifty_close"] = round(float(nifty_df["Close"].iloc[-1]), 2)
+                            prev = float(nifty_df["Close"].iloc[-2])
+                            data["nifty_change_pct"] = round(
+                                ((data["nifty_close"] - prev) / prev) * 100, 2
+                            ) if prev > 0 else 0.0
+                        elif len(nifty_df) == 1:
+                            data["nifty_close"] = round(float(nifty_df["Close"].iloc[-1]), 2)
+                    except Exception:
+                        logger.warning("[scanner] Could not parse Nifty index data")
+
+                    # Sensex
+                    try:
+                        sensex_df = idx["^BSESN"].dropna()
+                        if len(sensex_df) >= 2:
+                            data["sensex_close"] = round(float(sensex_df["Close"].iloc[-1]), 2)
+                            prev = float(sensex_df["Close"].iloc[-2])
+                            data["sensex_change_pct"] = round(
+                                ((data["sensex_close"] - prev) / prev) * 100, 2
+                            ) if prev > 0 else 0.0
+                        elif len(sensex_df) == 1:
+                            data["sensex_close"] = round(float(sensex_df["Close"].iloc[-1]), 2)
+                    except Exception:
+                        logger.warning("[scanner] Could not parse Sensex index data")
+            except Exception:
+                logger.warning("[scanner] Index price fetch failed (non-fatal)")
+
+            # If regime engine already got nifty price, use that as fallback
+            if not data.get("nifty_close") and data["nifty_price"] > 0:
+                data["nifty_close"] = round(data["nifty_price"], 2)
 
             return data
         return None

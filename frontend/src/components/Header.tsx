@@ -37,7 +37,7 @@ export default function Header({ regime, isConnected = false }: HeaderProps) {
   }, []);
 
   const regimeCfg = regime?.label
-    ? REGIME_CONFIG[regime.label]
+    ? (REGIME_CONFIG[regime.label] ?? { label: regime.label, color: "text-mute", bg: "bg-mute/15" })
     : null;
 
   return (

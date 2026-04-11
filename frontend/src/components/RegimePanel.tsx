@@ -65,7 +65,7 @@ export default function RegimePanel({
           <div className="flex items-center gap-1.5 mb-1">
             <TrendingUp className="w-3.5 h-3.5 text-mute" />
             <span className="text-[10px] text-mute uppercase tracking-wider">
-              Nifty 50
+              Nifty
             </span>
           </div>
           <div className="text-lg font-semibold font-mono text-ink">
