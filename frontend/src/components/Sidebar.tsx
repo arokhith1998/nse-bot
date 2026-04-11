@@ -8,6 +8,7 @@ import {
   ArrowLeftRight,
   BarChart2,
   Settings,
+  BookOpen,
   ShieldAlert,
 } from "lucide-react";
 
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { href: "/trades", label: "Trades", icon: ArrowLeftRight },
   { href: "/performance", label: "Performance", icon: BarChart2 },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/guide", label: "Guide", icon: BookOpen },
 ] as const;
 
 export default function Sidebar() {

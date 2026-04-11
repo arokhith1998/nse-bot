@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import RegimePanel from "@/components/RegimePanel";
 import PicksTable from "@/components/PicksTable";
 import TradeCard from "@/components/TradeCard";
@@ -10,9 +10,9 @@ import GrowwCalculator from "@/components/GrowwCalculator";
 import { useRegime } from "@/hooks/useRegime";
 import { usePicks } from "@/hooks/usePicks";
 import { useTrades } from "@/hooks/useTrades";
-import { fetchNews, fetchPortfolioRisk } from "@/lib/api";
+import { fetchNews, fetchPortfolioRisk, updateSettings } from "@/lib/api";
 import type { NewsItem, PortfolioRisk, FeatureWeight } from "@/lib/types";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, IndianRupee } from "lucide-react";
 import { formatIST } from "@/lib/constants";
 
 export default function DashboardPage() {
@@ -30,6 +30,11 @@ export default function DashboardPage() {
   const [risk, setRisk] = useState<PortfolioRisk | null>(null);
   const [riskLoading, setRiskLoading] = useState(true);
 
+  // Capital input state
+  const [capital, setCapital] = useState<number>(100000);
+  const [capitalInput, setCapitalInput] = useState<string>("100000");
+  const [capitalSaving, setCapitalSaving] = useState(false);
+
   useEffect(() => {
     fetchNews()
       .then((data) => setNews(Array.isArray(data?.items) ? data.items : []))
@@ -42,12 +47,68 @@ export default function DashboardPage() {
       .finally(() => setRiskLoading(false));
   }, []);
 
+  const handleCapitalSubmit = useCallback(async () => {
+    const val = Number(capitalInput);
+    if (isNaN(val) || val < 1000) return;
+    setCapitalSaving(true);
+    try {
+      await updateSettings({ capital: val });
+      setCapital(val);
+      // Refresh picks with new capital
+      await refreshPicks();
+    } catch {
+      // silently fail — picks will still show with old capital
+    } finally {
+      setCapitalSaving(false);
+    }
+  }, [capitalInput, refreshPicks]);
+
   const featureWeights: FeatureWeight[] = picks?.weights
     ? Object.entries(picks.weights).map(([name, weight]) => ({ name, weight }))
     : [];
 
   return (
     <>
+      {/* Capital input bar */}
+      <div className="bg-card border border-line rounded-xl p-4">
+        <div className="flex flex-col sm:flex-row items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 shrink-0">
+            <IndianRupee className="w-4 h-4 text-accent" />
+            <label className="text-xs font-semibold text-mute uppercase tracking-wider whitespace-nowrap">
+              Your Capital
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-mute">
+                INR
+              </span>
+              <input
+                type="number"
+                min={1000}
+                step={1000}
+                value={capitalInput}
+                onChange={(e) => setCapitalInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCapitalSubmit();
+                }}
+                className="w-36 pl-10 pr-3 py-1.5 text-sm bg-bg border border-line rounded-lg text-ink focus:border-accent/50 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
+            </div>
+            <button
+              onClick={handleCapitalSubmit}
+              disabled={capitalSaving || picksLoading}
+              className="px-3 py-1.5 text-xs font-medium bg-accent/20 text-accent border border-accent/30 rounded-lg hover:bg-accent/30 transition-colors disabled:opacity-50 whitespace-nowrap"
+            >
+              {capitalSaving ? "Updating..." : "Update Picks"}
+            </button>
+          </div>
+          <span className="text-[10px] text-mute/60 hidden sm:inline">
+            Picks scale with capital: 2 for 10K | 5 for 50K | 10 for 2L+
+          </span>
+        </div>
+      </div>
+
       {/* Top info bar */}
       <div className="flex items-center justify-between">
         <div className="text-xs text-mute">
