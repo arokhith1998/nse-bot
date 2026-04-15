@@ -95,7 +95,9 @@ def _time_of_day_multiplier(strategy: str) -> Tuple[float, str]:
     t = now_ist.time()
 
     if t < dt.time(9, 15):
-        return (0.5, "pre_market")
+        # Cannot score live intraday features on a market that hasn't opened.
+        # Pre-market scan uses status="watchlist" via _save_signals.
+        return (0.0, "pre_market")
     elif t < dt.time(9, 30):
         # Opening volatility: only MOMENTUM allowed
         if strategy == "MOMENTUM":
@@ -117,9 +119,10 @@ def _time_of_day_multiplier(strategy: str) -> Tuple[float, str]:
         # Afternoon trend
         return (0.9, "afternoon_trend")
     else:
-        # Late session: heavily penalise but don't block entirely
-        # (blocking causes zero signals which wipes existing picks)
-        return (0.15, "late_session")
+        # No new picks after 14:45 IST — MIS square-off at 15:15,
+        # insufficient time to reach 1.5R through widening spreads.
+        # The don't-expire-on-empty logic in _save_signals prevents UI-flicker.
+        return (0.0, "late_session")
 
 
 # ─── Improved slippage model (Review Item 6) ───────────────────────────
@@ -389,6 +392,10 @@ SCAN_UNIVERSE_TOP: List[str] = []       # top scorers from pre-market, used for 
 _news_score_cache: Dict[str, float] = {}
 _news_sentiment_cache: Dict[str, float] = {}  # symbol -> sentiment (-1 to +1)
 
+# Last scan veto breakdown (M6) — read by frontend_api for empty-state card
+last_veto_breakdown: Dict[str, int] = {}
+last_candidates_scanned: int = 0
+
 
 async def _refresh_news_scores():
     """Load recent news items from DB and build symbol->score (0-100)
@@ -426,27 +433,33 @@ async def _refresh_news_scores():
         logger.warning("[scanner] Failed to refresh news scores")
 
 
-async def _save_signals(signals: List[Dict], regime_label: str) -> int:
-    """Expire old pending signals and save new ones to DB.
+async def _save_signals(signals: List[Dict], regime_label: str,
+                        signal_status: str = "pending") -> int:
+    """Expire old signals of the same status and save new ones to DB.
 
     Applies capital tier gating (Review Item 15) and structural stops
     (Review Item 3) with scale-out levels (Review Item 4).
+
+    Parameters
+    ----------
+    signal_status : str
+        "pending" for live picks, "watchlist" for pre-market picks.
     """
     # Capital tier gating
     max_picks, min_adv = _capital_tier(settings.capital)
     base_picks = pick_count_for_capital(settings.capital)
     n_picks = min(base_picks, max_picks)
 
-    # Only expire old pending signals if we have new ones to replace them
+    # Only expire old signals if we have new ones to replace them
     if not signals:
-        logger.info("[scanner] No new signals — keeping existing pending picks")
+        logger.info("[scanner] No new signals — keeping existing %s picks", signal_status)
         return 0
 
     async with AsyncSessionLocal() as session:
         from sqlalchemy import update
         await session.execute(
             update(Signal)
-            .where(Signal.status == "pending")
+            .where(Signal.status == signal_status)
             .values(status="expired")
         )
         await session.commit()
@@ -522,6 +535,8 @@ async def _save_signals(signals: List[Dict], regime_label: str) -> int:
                     instrument_type="stock",
                     direction="long",
                     score=sig.get("score", 50.0),
+                    static_score=sig.get("static_score"),
+                    ev=sig.get("ev"),
                     strategy=sig.get("strategy", "MOMENTUM"),
                     regime_at_entry=regime_label,
                     source="scanner",
@@ -535,7 +550,7 @@ async def _save_signals(signals: List[Dict], regime_label: str) -> int:
                     do_not_enter_after=now + dt.timedelta(hours=6),
                     best_exit_window="14:30-15:00 IST",
                     explanation=explanation,
-                    status="pending",
+                    status=signal_status,
                 )
                 session.add(signal)
                 count += 1
@@ -571,9 +586,14 @@ async def run_premarket_full_scan(regime_label: str = "RANGE_CHOP",
         )
 
         # Generate and save signals from the full scan
+        # Before 09:15 IST, save as "watchlist" — not tradeable yet
+        now_ist = dt.datetime.now(IST)
+        pre_market = now_ist.time() < dt.time(9, 15)
+        status = "watchlist" if pre_market else "pending"
+
         signals = _generate_signals(universe, regime_label, regime_data=regime_data)
-        count = await _save_signals(signals, regime_label)
-        logger.info("[scanner] Pre-market scan generated %d signals", count)
+        count = await _save_signals(signals, regime_label, signal_status=status)
+        logger.info("[scanner] Pre-market scan generated %d %s signals", count, status)
         return count
     except Exception:
         logger.exception("[scanner] Pre-market full scan failed")
@@ -839,7 +859,7 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                 # Sentiment: -1 (very negative) to +1 (very positive)
                 news_sentiment = _news_sentiment_cache.get(symbol.upper(), 0.0)
 
-                # Composite score (6 factors)
+                # Composite score (6 factors) — uses current (possibly adapted) weights
                 score = (
                     trend_score * DEFAULT_WEIGHTS["trend"]
                     + momentum_score * DEFAULT_WEIGHTS["momentum"]
@@ -847,6 +867,20 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                     + breakout_score * DEFAULT_WEIGHTS["breakout"]
                     + volatility_score * DEFAULT_WEIGHTS["volatility"]
                     + news_score * DEFAULT_WEIGHTS["news"]
+                )
+
+                # Static baseline score for learning safeguard (M5)
+                STATIC_WEIGHTS = {
+                    "trend": 0.25, "momentum": 0.20, "volume": 0.15,
+                    "breakout": 0.15, "volatility": 0.10, "news": 0.15,
+                }
+                static_score = (
+                    trend_score * STATIC_WEIGHTS["trend"]
+                    + momentum_score * STATIC_WEIGHTS["momentum"]
+                    + volume_score * STATIC_WEIGHTS["volume"]
+                    + breakout_score * STATIC_WEIGHTS["breakout"]
+                    + volatility_score * STATIC_WEIGHTS["volatility"]
+                    + news_score * STATIC_WEIGHTS["news"]
                 )
 
                 # Determine strategy
@@ -927,6 +961,7 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                     "near_20d_high": near_20d_high,
                     "sma20": round(sma20, 2),
                     "score": round(score, 1),
+                    "static_score": round(static_score, 1),
                     "strategy": strategy,
                     "explanation": "; ".join(notes) if notes else f"{strategy} setup",
                     "qty": qty,
@@ -1070,12 +1105,11 @@ def _generate_signals(universe: List[Dict], regime_label: str,
               - cost_roundtrip
               - slippage_cost)
 
-        stock["ev"] = round(ev, 2)
         if ev <= 0:
             ev_veto_count += 1
-            # Soft penalty: demote score by 30% instead of hard block
-            # This way EV-negative picks appear as stretch picks, not top picks
-            stock["score"] = round(stock["score"] * 0.7, 1)
+            continue   # hard block — EV-negative picks must never reach users
+
+        stock["ev"] = round(ev, 2)
         stock["tod_bucket"] = tod_bucket
         logger.debug("[scanner] Accepted %s: score=%.1f, EV=%.2f, strategy=%s, "
                      "regime=%s, tod=%s",
@@ -1083,6 +1117,17 @@ def _generate_signals(universe: List[Dict], regime_label: str,
                      regime_label, tod_bucket)
 
         filtered.append(stock)
+
+    # ── Persist veto breakdown for M6 empty-state card ──────────────
+    global last_veto_breakdown, last_candidates_scanned
+    last_candidates_scanned = len(universe)
+    last_veto_breakdown = {
+        "regime": regime_veto_count,
+        "breadth": breadth_veto_count,
+        "time_of_day": tod_veto_count,
+        "ev": ev_veto_count,
+        "news": news_veto_count,
+    }
 
     # ── Logging ───────────────────────────────────────────────────────
     logger.info("[scanner] Signal generation: %d candidates -> %d accepted "
@@ -1140,6 +1185,17 @@ async def run_eod_grade() -> int:
                 trade.cost = round(cost, 2)
                 trade.status = "closed"
                 trade.exit_reason = "eod_square_off"
+
+                # M5: static counterfactual — scale PnL by static/adaptive score ratio
+                adaptive_score = signal.score or 50.0
+                static_score = signal.static_score or adaptive_score
+                if adaptive_score > 0:
+                    score_ratio = static_score / adaptive_score
+                    # Counterfactual qty would differ proportionally to score
+                    trade.pnl_static_counterfactual = round(net_pnl * score_ratio, 2)
+                else:
+                    trade.pnl_static_counterfactual = round(net_pnl, 2)
+
                 closed += 1
 
             await session.commit()

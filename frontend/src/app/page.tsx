@@ -183,6 +183,9 @@ export default function DashboardPage() {
         weights={picks?.weights}
         advisory={picks?.advisory}
         recommendedPickCount={picks?.recommended_pick_count}
+        preMarketWatchlist={picks?.pre_market_watchlist}
+        candidatesScanned={picks?.candidates_scanned}
+        vetoBreakdown={picks?.veto_breakdown}
       />
 
       {/* Main Grid: Trades + News | Risk */}

@@ -375,36 +375,57 @@ class LearningEngine:
             self._save_regime_weights(regime, base_weights)
 
         # ---- Learning safeguard: compare adaptive vs static baseline ----
-        # (Expert review item 10: learning loop must be falsifiable)
+        # (M5: real comparison using actual counterfactual PnLs from DB)
         static_baseline = {
             "trend": 0.25, "momentum": 0.20, "volume": 0.15,
-            "breakout": 0.15, "volatility": 0.10, "news": 0.10, "liquidity": 0.05,
+            "breakout": 0.15, "volatility": 0.10, "news": 0.15,
         }
+
         adaptive_pnls = [t.pnl_abs for t in windowed]
-        if len(adaptive_pnls) >= 10:
+        # Load static counterfactual PnLs from DB
+        static_pnls = self._load_static_counterfactual_pnls(len(windowed))
+
+        if len(adaptive_pnls) >= 10 and len(static_pnls) >= 10:
             import numpy as np
-            pnl_arr = np.array(adaptive_pnls)
-            adaptive_sharpe = float(np.mean(pnl_arr) / max(np.std(pnl_arr), 1e-6) * math.sqrt(252))
-            # For static baseline, we approximate — if adaptive isn't beating
-            # the static default over 30 sessions, revert to static
-            baseline_sharpe = adaptive_sharpe * 0.9  # approximate static as 90% of adaptive for now
-            if hasattr(self, '_static_underperform_count'):
-                pass
-            else:
+            adapt_arr = np.array(adaptive_pnls[-len(static_pnls):])
+            static_arr = np.array(static_pnls[-len(adapt_arr):])
+
+            adaptive_sharpe = float(
+                np.mean(adapt_arr) / max(np.std(adapt_arr), 1e-6) * math.sqrt(252)
+            )
+            baseline_sharpe = float(
+                np.mean(static_arr) / max(np.std(static_arr), 1e-6) * math.sqrt(252)
+            )
+
+            if not hasattr(self, '_static_underperform_count'):
                 self._static_underperform_count = 0
 
             if adaptive_sharpe <= baseline_sharpe and len(windowed) >= 30:
                 self._static_underperform_count += 1
+                logger.info(
+                    "[learning] Adaptive Sharpe %.3f <= static %.3f "
+                    "(consecutive underperform: %d/30)",
+                    adaptive_sharpe, baseline_sharpe,
+                    self._static_underperform_count,
+                )
                 if self._static_underperform_count >= 30:
-                    # Auto-revert to static weights
                     base_weights = dict(static_baseline)
-                    changes = {k: base_weights[k] - old_weights.get(k, 0) for k in base_weights}
+                    changes = {
+                        k: base_weights[k] - old_weights.get(k, 0)
+                        for k in base_weights
+                    }
                     reasoning_parts.append(
-                        "AUTO-REVERT: adaptive weights underperformed static baseline "
-                        f"for {self._static_underperform_count} sessions. Reverted to defaults."
+                        "AUTO-REVERT: adaptive Sharpe (%.3f) <= static baseline "
+                        "(%.3f) for %d consecutive sessions. Reverted to defaults."
+                        % (adaptive_sharpe, baseline_sharpe,
+                           self._static_underperform_count)
                     )
-                    logger.warning("[learning] Auto-reverted to static baseline weights after %d sessions of underperformance",
-                                 self._static_underperform_count)
+                    logger.warning(
+                        "[learning] AUTO-REVERT to static baseline weights — "
+                        "adaptive Sharpe %.3f <= static %.3f for %d sessions",
+                        adaptive_sharpe, baseline_sharpe,
+                        self._static_underperform_count,
+                    )
                     self._static_underperform_count = 0
             else:
                 self._static_underperform_count = 0
@@ -432,6 +453,47 @@ class LearningEngine:
             changes_dict=changes,
             reasoning=reasoning,
         )
+
+    # ------------------------------------------------------------------
+    # Static counterfactual PnL loader (M5)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_static_counterfactual_pnls(limit: int = 60) -> List[float]:
+        """Load pnl_static_counterfactual from the last N closed trades.
+
+        Returns a list of floats. Falls back to empty list if DB unavailable.
+        """
+        try:
+            import asyncio
+            from sqlalchemy import select, desc
+            from backend.database import AsyncSessionLocal
+            from backend.models import Trade
+
+            async def _fetch():
+                async with AsyncSessionLocal() as session:
+                    result = await session.execute(
+                        select(Trade.pnl_static_counterfactual)
+                        .where(Trade.status == "closed")
+                        .where(Trade.pnl_static_counterfactual.isnot(None))
+                        .order_by(desc(Trade.exit_time))
+                        .limit(limit)
+                    )
+                    rows = result.scalars().all()
+                    return [float(r) for r in reversed(rows)]  # oldest-first
+
+            try:
+                loop = asyncio.get_running_loop()
+                # If loop is running, create task and block — but this is called
+                # from a sync context within update_weights, so use thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(asyncio.run, _fetch()).result(timeout=10)
+            except RuntimeError:
+                return asyncio.run(_fetch())
+        except Exception:
+            logger.warning("[learning] Could not load static counterfactual PnLs")
+            return []
 
     # ------------------------------------------------------------------
     # Audit trail

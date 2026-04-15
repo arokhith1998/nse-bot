@@ -45,6 +45,17 @@ export interface Pick {
   ev?: number;
 }
 
+export interface PreMarketWatchlistItem {
+  symbol: string;
+  price: number;
+  score: number;
+  strategy: string;
+  entry_zone: string;
+  stop_loss: number;
+  target: number;
+  ev?: number | null;
+}
+
 export interface PicksResponse {
   generated_at: string;
   data_as_of: string;
@@ -56,10 +67,13 @@ export interface PicksResponse {
   news_count: number;
   top_picks: Pick[];
   stretch_picks: Pick[];
+  pre_market_watchlist?: PreMarketWatchlistItem[];
   advisory?: string | null;
   recommended_pick_count?: number;
   disclaimer: string;
   capital_warning?: string | null;
+  candidates_scanned?: number;
+  veto_breakdown?: Record<string, number>;
 }
 
 export interface ScoreBreakdown {

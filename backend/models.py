@@ -127,9 +127,17 @@ class Signal(Base):
         Text, nullable=True,
         comment="Human-readable reasoning for the signal.",
     )
+    ev: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True,
+        comment="Expected value in INR computed at signal-generation time.",
+    )
+    static_score: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True,
+        comment="Score computed with static DEFAULT_WEIGHTS (for learning safeguard counterfactual).",
+    )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending",
-        comment="pending | active | filled | expired | cancelled",
+        comment="pending | active | filled | expired | cancelled | watchlist",
     )
 
     # ── Relationships ────────────────────────────────────────────────
@@ -184,6 +192,10 @@ class Trade(Base):
     exit_reason: Mapped[Optional[str]] = mapped_column(
         String(60), nullable=True,
         comment="E.g. stop_loss | target1 | target2 | trailing | manual | eod_square_off",
+    )
+    pnl_static_counterfactual: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True,
+        comment="Counterfactual net PnL if scored with static DEFAULT_WEIGHTS (for learning safeguard).",
     )
 
     # ── Relationships ────────────────────────────────────────────────

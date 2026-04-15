@@ -14,7 +14,7 @@ import {
   Target,
 } from "lucide-react";
 import { scoreColor, formatCurrency, formatNumber } from "@/lib/constants";
-import type { Pick } from "@/lib/types";
+import type { Pick, PreMarketWatchlistItem } from "@/lib/types";
 
 type SortKey =
   | "score"
@@ -32,6 +32,9 @@ interface PicksTableProps {
   weights?: Record<string, number>;
   advisory?: string | string[] | null;
   recommendedPickCount?: number;
+  preMarketWatchlist?: PreMarketWatchlistItem[];
+  candidatesScanned?: number;
+  vetoBreakdown?: Record<string, number>;
 }
 
 function ScoreBadge({ score }: { score: number }) {
@@ -503,6 +506,9 @@ export default function PicksTable({
   weights,
   advisory,
   recommendedPickCount,
+  preMarketWatchlist,
+  candidatesScanned,
+  vetoBreakdown,
 }: PicksTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -549,6 +555,74 @@ export default function PicksTable({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* M6: Empty-state card when no picks */}
+      {topPicks.length === 0 && stretchPicks.length === 0 && (
+        <div className="p-6 rounded-lg bg-card-alt border border-line text-center space-y-3">
+          <p className="text-sm font-semibold text-ink">
+            No picks today
+          </p>
+          {candidatesScanned != null && candidatesScanned > 0 && (
+            <p className="text-xs text-mute">
+              {candidatesScanned} candidates scanned.
+              {vetoBreakdown && Object.keys(vetoBreakdown).length > 0 && (
+                <> Vetoed by:{" "}
+                  {Object.entries(vetoBreakdown)
+                    .filter(([, v]) => v > 0)
+                    .map(([k, v]) => `${v} ${k.replace("_", " ")}`)
+                    .join(" · ")}
+                </>
+              )}
+            </p>
+          )}
+          <p className="text-xs text-mute/70">
+            Recommendation: sit on hands today, or check the{" "}
+            <a href="/etf" className="text-accent underline">ETF picks tab</a>.
+          </p>
+        </div>
+      )}
+
+      {/* M3: Pre-market watchlist */}
+      {preMarketWatchlist && preMarketWatchlist.length > 0 && (
+        <div className="mt-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Clock className="w-3.5 h-3.5 text-yellow" />
+            <h3 className="text-xs font-semibold text-yellow uppercase tracking-wider">
+              Pre-market Watchlist — pending 09:15 confirmation
+            </h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-line">
+                  <th className="px-3 py-2 text-left text-[10px] text-mute uppercase">Symbol</th>
+                  <th className="px-3 py-2 text-left text-[10px] text-mute uppercase">Score</th>
+                  <th className="px-3 py-2 text-left text-[10px] text-mute uppercase">Strategy</th>
+                  <th className="px-3 py-2 text-left text-[10px] text-mute uppercase">Entry Zone</th>
+                  <th className="px-3 py-2 text-left text-[10px] text-mute uppercase">Stop</th>
+                  <th className="px-3 py-2 text-left text-[10px] text-mute uppercase">Target</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preMarketWatchlist.map((item) => (
+                  <tr key={item.symbol} className="border-b border-line/30 opacity-70">
+                    <td className="px-3 py-2 font-semibold text-ink">{item.symbol}</td>
+                    <td className="px-3 py-2"><ScoreBadge score={item.score} /></td>
+                    <td className="px-3 py-2">
+                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-card-alt border border-line text-mute">
+                        {item.strategy}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-ink">{item.entry_zone}</td>
+                    <td className="px-3 py-2 font-mono text-red">{item.stop_loss.toFixed(2)}</td>
+                    <td className="px-3 py-2 font-mono text-green">{item.target.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
