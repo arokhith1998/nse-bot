@@ -67,8 +67,43 @@ export default function DashboardPage() {
     ? Object.entries(picks.weights).map(([name, weight]) => ({ name, weight }))
     : [];
 
+  // Review mode: after 15:15 IST, show review banner
+  const [isReviewMode, setIsReviewMode] = useState(false);
+  useEffect(() => {
+    const checkTime = () => {
+      const now = new Date();
+      const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+      const hours = ist.getHours();
+      const mins = ist.getMinutes();
+      setIsReviewMode(hours > 15 || (hours === 15 && mins >= 15));
+    };
+    checkTime();
+    const timer = setInterval(checkTime, 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
     <>
+      {/* Review Mode Banner (item 22) */}
+      {isReviewMode && (
+        <div className="bg-yellow/10 border border-yellow/30 rounded-xl p-4 flex items-center gap-3">
+          <span className="text-yellow text-lg">&#9201;</span>
+          <div>
+            <p className="text-sm font-semibold text-yellow">Market Closed — Review Mode</p>
+            <p className="text-xs text-mute">
+              No new picks. Review today&apos;s outcomes. Fresh picks at 09:15 tomorrow.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Capital Advisory (item 15) */}
+      {picks?.advisory && (
+        <div className="bg-yellow/10 border border-yellow/30 rounded-xl p-3 text-xs text-yellow/90">
+          <strong>Advisory:</strong> {picks.advisory}
+        </div>
+      )}
+
       {/* Capital input bar */}
       <div className="bg-card border border-line rounded-xl p-4">
         <div className="flex flex-col sm:flex-row items-center gap-3 flex-wrap">

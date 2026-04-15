@@ -37,6 +37,12 @@ export interface Pick {
   net_rr: number;
   source: string;
   notes?: string[];
+  // Scale-out & invalidation (expert review items 4, 16)
+  scale_out_1?: number;
+  scale_out_2?: number;
+  invalidation?: string;
+  time_validity?: string;
+  ev?: number;
 }
 
 export interface PicksResponse {
@@ -50,9 +56,10 @@ export interface PicksResponse {
   news_count: number;
   top_picks: Pick[];
   stretch_picks: Pick[];
-  advisory?: string[];
+  advisory?: string | null;
   recommended_pick_count?: number;
   disclaimer: string;
+  capital_warning?: string | null;
 }
 
 export interface ScoreBreakdown {
@@ -146,6 +153,9 @@ export interface RegimeState {
   scoring_modifier: number;
   reasoning: string;
   timestamp: string;
+  // Strategy gating (expert review item 18)
+  allowed_strategies?: string[];
+  disallowed_strategies?: string[];
 }
 
 export interface NewsItem {
@@ -177,6 +187,9 @@ export interface PerformanceData {
   best_trade: TradeHistory | null;
   worst_trade: TradeHistory | null;
   daily_pnl: Array<{ date: string; pnl: number; cumulative: number }>;
+  // R-multiple distribution (expert review item 19)
+  r_distribution?: Record<string, number>;
+  expectancy?: number;
 }
 
 export interface FeatureWeight {

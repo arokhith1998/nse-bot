@@ -184,6 +184,47 @@ export default function RegimePanel({
         </span>
       </div>
 
+      {/* Strategy Gating — what's allowed today */}
+      {((regime.allowed_strategies?.length ?? 0) > 0 ||
+        (regime.disallowed_strategies?.length ?? 0) > 0) && (
+        <div className="flex gap-6 mb-3 pt-3 border-t border-line">
+          {(regime.allowed_strategies?.length ?? 0) > 0 && (
+            <div>
+              <span className="text-[10px] text-green uppercase tracking-wider font-semibold">
+                Allowed Today
+              </span>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {(regime.allowed_strategies ?? []).map((s) => (
+                  <span
+                    key={s}
+                    className="px-2 py-0.5 text-[10px] rounded bg-green/10 text-green border border-green/20"
+                  >
+                    {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {(regime.disallowed_strategies?.length ?? 0) > 0 && (
+            <div>
+              <span className="text-[10px] text-red uppercase tracking-wider font-semibold">
+                Off-Limits
+              </span>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {(regime.disallowed_strategies ?? []).map((s) => (
+                  <span
+                    key={s}
+                    className="px-2 py-0.5 text-[10px] rounded bg-red/10 text-red border border-red/20"
+                  >
+                    {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Reasoning */}
       {regime.reasoning && (
         <p className="text-xs text-mute/80 leading-relaxed border-t border-line pt-3">

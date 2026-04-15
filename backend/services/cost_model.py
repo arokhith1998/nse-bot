@@ -206,46 +206,59 @@ def calculate_net_rr(
 
 # ── Slippage Model ──────────────────────────────────────────────────
 
-def estimate_slippage(price: float, qty: int, avg_daily_volume: float) -> float:
-    """Estimate slippage as a percentage of price.
+def estimate_slippage(
+    price: float,
+    qty: int,
+    avg_daily_volume: float,
+    avg_daily_turnover: float = 0.0,
+) -> float:
+    """Estimate slippage for NSE equities.
 
-    Uses a square-root market impact model:
-        slippage_pct = 0.1 * sqrt(qty / avg_daily_volume)
-
-    For illiquid stocks (avg_daily_volume < 100K), adds 0.1% premium.
-    Capped at 0.5%.
+    Uses spread + impact + illiquidity premium model.
+    More realistic for NSE mid-caps than pure sqrt model.
 
     Parameters
     ----------
     price : float
-        Current price (unused in formula but available for future models).
+        Current price per share.
     qty : int
         Order quantity in shares.
     avg_daily_volume : float
         Average daily volume in shares (20-day average).
+    avg_daily_turnover : float
+        Average daily turnover in INR. If 0, estimated from price * volume.
 
     Returns
     -------
     float
-        Estimated one-way slippage as a percentage (e.g., 0.05 means 0.05%).
+        Estimated one-way slippage cost in INR.
     """
     if avg_daily_volume <= 0:
-        return 0.5  # max slippage for unknown liquidity
+        return price * qty * 0.005  # 0.5% for unknown liquidity
 
-    participation_rate = qty / avg_daily_volume
-    slippage_pct = 0.1 * math.sqrt(participation_rate) * 100
+    if avg_daily_turnover <= 0:
+        avg_daily_turnover = price * avg_daily_volume
 
-    # Illiquidity premium
-    if avg_daily_volume < 100_000:
-        slippage_pct += 0.1
+    # 1. Spread cost: tighter for large-caps, wider for sub-₹200 names
+    spread_bps = max(5, 1000 / max(price, 1))
+    spread_cost = 0.5 * (spread_bps / 10_000) * price * qty
 
-    return round(min(slippage_pct, 0.5), 4)
+    # 2. Market impact (sqrt model)
+    impact = 0.1 * math.sqrt(qty / max(avg_daily_volume, 1)) * price * qty
+
+    # 3. Illiquidity premium for stocks with < ₹5 Cr daily turnover
+    illiquidity_premium = 0.0
+    if avg_daily_turnover < 5_00_00_000:  # ₹5 Cr
+        illiquidity_premium = price * qty * 0.002
+
+    return round(spread_cost + impact + illiquidity_premium, 2)
 
 
 def total_execution_cost(
     price: float,
     qty: int,
     avg_daily_volume: float,
+    avg_daily_turnover: float = 0.0,
     cost_fn=groww_intraday_cost,
 ) -> float:
     """Total round-trip cost: brokerage + statutory + estimated slippage.
@@ -258,6 +271,8 @@ def total_execution_cost(
         Number of shares.
     avg_daily_volume : float
         20-day average daily volume.
+    avg_daily_turnover : float
+        Average daily turnover in INR. If 0, estimated from price * volume.
     cost_fn : callable
         Cost calculator (default: Groww).
 
@@ -267,6 +282,5 @@ def total_execution_cost(
         Total estimated round-trip execution cost in INR.
     """
     charges = cost_fn(price, qty)
-    slip_pct = estimate_slippage(price, qty, avg_daily_volume)
-    slippage_cost = price * qty * slip_pct / 100 * 2  # both legs
-    return round(charges.total + slippage_cost, 2)
+    slippage_one_way = estimate_slippage(price, qty, avg_daily_volume, avg_daily_turnover)
+    return round(charges.total + slippage_one_way * 2, 2)  # both legs

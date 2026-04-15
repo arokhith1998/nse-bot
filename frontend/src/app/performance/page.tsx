@@ -5,7 +5,7 @@ import { fetchPerformance } from "@/lib/api";
 import PerformanceChart from "@/components/PerformanceChart";
 import type { PerformanceData, FeatureWeight } from "@/lib/types";
 import { formatCurrency, formatPct } from "@/lib/constants";
-import { Brain, Target, TrendingUp, TrendingDown } from "lucide-react";
+import { Brain, Target, TrendingUp, TrendingDown, BarChart2 } from "lucide-react";
 
 export default function PerformancePage() {
   const [perf, setPerf] = useState<PerformanceData | null>(null);
@@ -108,6 +108,47 @@ export default function PerformancePage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* R-Multiple Distribution */}
+      {perf && perf.r_distribution && Object.values(perf.r_distribution).some(v => v > 0) && (
+        <div className="bg-card border border-line rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <BarChart2 className="w-4 h-4 text-mute" />
+              <h2 className="text-xs font-semibold text-mute uppercase tracking-wider">
+                R-Multiple Distribution
+              </h2>
+            </div>
+            {perf.expectancy != null && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-mute">Expectancy:</span>
+                <span className={`font-mono font-semibold ${(perf.expectancy ?? 0) >= 0 ? "text-green" : "text-red"}`}>
+                  {(perf.expectancy ?? 0) > 0 ? "+" : ""}{(perf.expectancy ?? 0).toFixed(3)}R
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="flex items-end gap-1 h-32">
+            {Object.entries(perf.r_distribution).map(([bucket, count]) => {
+              const maxCount = Math.max(...Object.values(perf.r_distribution!), 1);
+              const h = (count / maxCount) * 100;
+              const isNegative = bucket.includes("-");
+              return (
+                <div key={bucket} className="flex-1 flex flex-col items-center gap-1">
+                  <span className="text-[9px] font-mono text-mute">{count}</span>
+                  <div
+                    className={`w-full rounded-t ${isNegative ? "bg-red/60" : "bg-green/60"}`}
+                    style={{ height: `${Math.max(h, 2)}%` }}
+                  />
+                  <span className="text-[8px] text-mute text-center leading-tight">
+                    {bucket.replace(" to ", "\n")}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

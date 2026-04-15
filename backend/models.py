@@ -476,3 +476,21 @@ class UserSettings(Base):
 
     def __repr__(self) -> str:
         return f"<UserSettings(key={self.key!r}, value={self.value!r})>"
+
+
+# ── User Veto ───────────────────────────────────────────────────────────
+
+class UserVeto(Base):
+    """Record of a user vetoing a pick."""
+
+    __tablename__ = "user_vetoes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(50), nullable=False, default="other")
+    timestamp: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<UserVeto(id={self.id}, symbol={self.symbol!r}, reason={self.reason!r})>"

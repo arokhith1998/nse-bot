@@ -8,6 +8,10 @@ import {
   TrendingUp,
   TrendingDown,
   Newspaper,
+  ShieldAlert,
+  Clock,
+  XCircle,
+  Target,
 } from "lucide-react";
 import { scoreColor, formatCurrency, formatNumber } from "@/lib/constants";
 import type { Pick } from "@/lib/types";
@@ -26,7 +30,7 @@ interface PicksTableProps {
   topPicks: Pick[];
   stretchPicks: Pick[];
   weights?: Record<string, number>;
-  advisory?: string[];
+  advisory?: string | string[] | null;
   recommendedPickCount?: number;
 }
 
@@ -212,6 +216,84 @@ function ExpandedRow({
                   ))}
               </div>
             )}
+          </div>
+        </div>
+
+        {/* Scale-Out Plan & Invalidation */}
+        <div className="mt-3 pt-3 border-t border-line grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Scale-out levels */}
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Target className="w-3 h-3 text-accent" />
+              <h4 className="text-[10px] text-mute uppercase tracking-wider font-semibold">
+                Scale-Out Plan
+              </h4>
+            </div>
+            <div className="space-y-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-mute">1R — Book 50%</span>
+                <span className="font-mono text-green">
+                  {formatNumber(pick.scale_out_1 ?? pick.target)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-mute">1.5R — Book 25%</span>
+                <span className="font-mono text-green">
+                  {formatNumber(pick.scale_out_2 ?? pick.target)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-mute">2R+ — Trail 25%</span>
+                <span className="font-mono text-accent">
+                  {formatNumber(pick.target)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Invalidation & Time */}
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <ShieldAlert className="w-3 h-3 text-red" />
+              <h4 className="text-[10px] text-mute uppercase tracking-wider font-semibold">
+                What Invalidates This
+              </h4>
+            </div>
+            <p className="text-xs text-red/80 font-mono">
+              {pick.invalidation ?? `Breaks below ${formatNumber(pick.stop_loss)}`}
+            </p>
+            {pick.time_validity && (
+              <div className="flex items-center gap-1 mt-2 text-xs text-mute">
+                <Clock className="w-3 h-3" />
+                <span>Valid: {pick.time_validity}</span>
+              </div>
+            )}
+            {pick.ev != null && (
+              <div className="flex items-center gap-1 mt-1 text-xs">
+                <span className="text-mute">EV:</span>
+                <span className={`font-mono font-semibold ${(pick.ev ?? 0) > 0 ? "text-green" : "text-red"}`}>
+                  {(pick.ev ?? 0) > 0 ? "+" : ""}{(pick.ev ?? 0).toFixed(0)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Veto / Skip */}
+          <div className="flex flex-col justify-center items-end">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                fetch(`/api/picks/${pick.symbol}/veto?reason=skip_today`, { method: "POST" })
+                  .catch(() => {});
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-red/10 border border-red/20 rounded-lg text-red hover:bg-red/20 transition-colors"
+            >
+              <XCircle className="w-3.5 h-3.5" />
+              Skip Today
+            </button>
+            <span className="text-[10px] text-mute/50 mt-1">
+              Feeds learning engine
+            </span>
           </div>
         </div>
 
@@ -455,13 +537,13 @@ export default function PicksTable({
         </span>
       </div>
 
-      {advisory && advisory.length > 0 && (
+      {advisory && (
         <div className="mb-4 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
           <p className="text-[10px] font-semibold text-yellow-400 uppercase tracking-wider mb-1.5">
             Advisory
           </p>
           <ul className="space-y-1">
-            {advisory.map((line, i) => (
+            {(Array.isArray(advisory) ? advisory : [advisory]).map((line, i) => (
               <li key={i} className="text-xs text-mute leading-relaxed">
                 {line}
               </li>

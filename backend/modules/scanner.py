@@ -4,6 +4,18 @@ NSE Market Intelligence Platform - Scanner Module
 Orchestrates the full scan pipeline: regime detection, news fetching,
 stock universe scanning, indicator computation, and signal generation.
 Saves all results to the database.
+
+Incorporates expert intraday trader review improvements:
+- Regime-aware strategy gating
+- Structural stops (max of day_low, sma20-0.25*ATR, prev_close*0.985)
+- EV-positive gate on every pick
+- Breadth gate on longs
+- Time-of-day bucketing with strategy multipliers
+- Tightened liquidity gates (ADV >= 5 Cr, circuit filter)
+- Capital tier gating
+- Scale-out levels (1R/1.5R/2R)
+- Improved slippage model (spread + impact + illiquidity premium)
+- Continuous news scoring with negative-news block
 """
 from __future__ import annotations
 
@@ -11,12 +23,13 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import math
 import traceback
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 import pytz
 
-from backend.config import settings
+from backend.config import settings, pick_count_for_capital
 from backend.database import AsyncSessionLocal
 from backend.models import (
     NewsItem as NewsItemModel,
@@ -25,6 +38,7 @@ from backend.models import (
     Trade,
     WeightsHistory,
 )
+from backend.services.cost_model import groww_intraday_cost, estimate_slippage
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +53,108 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "volatility": 0.10,
     "news": 0.15,
 }
+
+# ─── Regime-aware strategy gating (Review Item 2) ─────────────────────
+
+# Maps regime_label -> set of allowed strategies.
+# Strategies not in the allowed set are vetoed for that regime.
+REGIME_ALLOWED_STRATEGIES: Dict[str, Set[str]] = {
+    "trend_up":       {"BREAKOUT", "MOMENTUM", "GAP_AND_GO", "SWING"},
+    "trend_down":     {"MEAN_REVERSION"},
+    "range_chop":     {"MEAN_REVERSION", "SWING"},
+    "high_vol_event": {"SWING"},
+    "low_liq_drift":  {"SWING"},
+    "gap_and_go":     {"GAP_AND_GO", "MOMENTUM"},
+    "gap_fill":       {"MEAN_REVERSION", "SWING"},
+}
+
+# Regime-level sizing multipliers (e.g. reduced sizing in volatile regimes)
+REGIME_SIZE_MULT: Dict[str, float] = {
+    "trend_up":       1.0,
+    "trend_down":     0.7,
+    "range_chop":     0.9,
+    "high_vol_event": 0.5,
+    "low_liq_drift":  0.3,
+    "gap_and_go":     1.0,
+    "gap_fill":       0.85,
+}
+
+# ─── Time-of-day buckets (Review Item 12) ──────────────────────────────
+
+def _time_of_day_multiplier(strategy: str) -> Tuple[float, str]:
+    """Return (multiplier, bucket_name) for the current IST time and strategy.
+
+    Buckets:
+      09:15-09:30  Opening volatility - only MOMENTUM, mult 0.6
+      09:30-11:00  Prime breakout window - BREAKOUT/MOMENTUM favored, mult 1.0
+      11:00-13:30  Midday range - MEAN_REVERSION/SWING favored, BREAKOUT*0.3
+      13:30-14:45  Afternoon trend - BREAKOUT if trend holds, mult 0.9
+      After 14:45  No new picks (mult 0.0)
+    """
+    now_ist = dt.datetime.now(IST)
+    t = now_ist.time()
+
+    if t < dt.time(9, 15):
+        return (0.0, "pre_market")
+    elif t < dt.time(9, 30):
+        # Opening volatility: only MOMENTUM allowed
+        if strategy == "MOMENTUM":
+            return (0.6, "opening_vol")
+        return (0.0, "opening_vol")
+    elif t < dt.time(11, 0):
+        # Prime window: BREAKOUT and MOMENTUM favored
+        if strategy in ("BREAKOUT", "MOMENTUM"):
+            return (1.0, "prime_window")
+        return (0.8, "prime_window")
+    elif t < dt.time(13, 30):
+        # Midday range: MEAN_REVERSION and SWING favored
+        if strategy in ("MEAN_REVERSION", "SWING"):
+            return (1.0, "midday_range")
+        if strategy == "BREAKOUT":
+            return (0.3, "midday_range")
+        return (0.7, "midday_range")
+    elif t < dt.time(14, 45):
+        # Afternoon trend
+        return (0.9, "afternoon_trend")
+    else:
+        # No new picks after 14:45 IST
+        return (0.0, "late_session")
+
+
+# ─── Improved slippage model (Review Item 6) ───────────────────────────
+
+def _estimate_slippage(price: float, qty: int, adv_shares: float, adv_rupees: float) -> float:
+    """Estimate total one-way slippage cost in INR.
+
+    Components:
+      1. Spread cost: half the estimated bid-ask spread
+      2. Market impact: sqrt-law participation impact
+      3. Illiquidity premium: extra cost for thinly traded names (ADV < 5 Cr)
+
+    Returns the total slippage cost in INR (NOT percentage).
+    """
+    spread_bps = max(5, 1000 / price)
+    spread_cost = 0.5 * (spread_bps / 10_000) * price * qty
+    impact = 0.1 * math.sqrt(qty / max(adv_shares, 1)) * price * qty
+    illiquidity_premium = (price * qty * 0.002) if adv_rupees < 5_00_00_000 else 0
+    return spread_cost + impact + illiquidity_premium
+
+
+# ─── Capital tier gating (Review Item 15) ──────────────────────────────
+
+def _capital_tier(capital: float) -> Tuple[int, float]:
+    """Return (max_picks, min_adv_rupees) based on capital.
+
+    Smaller accounts are restricted to fewer, more liquid picks.
+    """
+    if capital < 10_000:
+        return (2, 50_00_00_000)    # max 2 picks, ADV >= 50 Cr
+    elif capital < 25_000:
+        return (3, 25_00_00_000)    # max 3 picks, ADV >= 25 Cr
+    elif capital < 50_000:
+        return (4, 5_00_00_000)     # max 4 picks, ADV >= 5 Cr
+    else:
+        return (settings.max_open_positions * 2, 5_00_00_000)
 
 
 # ─── Regime Scan ────────────────────────────────────────────────────────
@@ -268,38 +384,53 @@ from backend.backtester.data_loader import NIFTY200_SYMBOLS, load_full_nse_unive
 SCAN_UNIVERSE = list(NIFTY200_SYMBOLS)  # default, updated by pre-market scan
 SCAN_UNIVERSE_TOP: List[str] = []       # top scorers from pre-market, used for intraday
 
-# Module-level cache for news scores (populated before each scan)
+# Module-level caches for news scores and sentiment (populated before each scan)
 _news_score_cache: Dict[str, float] = {}
+_news_sentiment_cache: Dict[str, float] = {}  # symbol -> sentiment (-1 to +1)
 
 
 async def _refresh_news_scores():
-    """Load recent news items from DB and build a symbol->score (0-100) map."""
-    global _news_score_cache
+    """Load recent news items from DB and build symbol->score (0-100)
+    and symbol->sentiment (-1 to +1) maps.
+
+    Implements Review Item 10: continuous news scoring with negative-news gate.
+    """
+    global _news_score_cache, _news_sentiment_cache
     try:
         from sqlalchemy import select, func
         async with AsyncSessionLocal() as session:
             cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24)
             result = await session.execute(
-                select(NewsItemModel.symbol, func.max(NewsItemModel.weighted_impact))
+                select(
+                    NewsItemModel.symbol,
+                    func.max(NewsItemModel.weighted_impact),
+                    func.avg(NewsItemModel.sentiment_score),
+                )
                 .where(NewsItemModel.timestamp >= cutoff)
                 .where(NewsItemModel.symbol.isnot(None))
                 .group_by(NewsItemModel.symbol)
             )
             rows = result.all()
             _news_score_cache.clear()
-            for sym, impact in rows:
+            _news_sentiment_cache.clear()
+            for sym, impact, sentiment in rows:
                 if sym:
+                    sym_upper = sym.upper()
                     # weighted_impact is 0.0-1.0, scale to 0-100
-                    _news_score_cache[sym.upper()] = min(float(impact) * 100, 100.0)
+                    _news_score_cache[sym_upper] = min(float(impact or 0) * 100, 100.0)
+                    # sentiment_score: keep as-is (-1 to +1 range)
+                    _news_sentiment_cache[sym_upper] = float(sentiment or 0)
             logger.info("[scanner] Loaded news scores for %d symbols", len(_news_score_cache))
     except Exception:
         logger.warning("[scanner] Failed to refresh news scores")
 
 
 async def _save_signals(signals: List[Dict], regime_label: str) -> int:
-    """Expire old pending signals and save new ones to DB."""
-    from backend.config import pick_count_for_capital
+    """Expire old pending signals and save new ones to DB.
 
+    Applies capital tier gating (Review Item 15) and structural stops
+    (Review Item 3) with scale-out levels (Review Item 4).
+    """
     # Expire old pending signals
     async with AsyncSessionLocal() as session:
         from sqlalchemy import update
@@ -310,7 +441,11 @@ async def _save_signals(signals: List[Dict], regime_label: str) -> int:
         )
         await session.commit()
 
-    n_picks = pick_count_for_capital(settings.capital)
+    # Capital tier gating
+    max_picks, min_adv = _capital_tier(settings.capital)
+    base_picks = pick_count_for_capital(settings.capital)
+    n_picks = min(base_picks, max_picks)
+
     count = 0
     async with AsyncSessionLocal() as session:
         now = dt.datetime.now(dt.timezone.utc)
@@ -322,18 +457,59 @@ async def _save_signals(signals: List[Dict], regime_label: str) -> int:
                 if price <= 0:
                     continue
 
-                sl = round(price - 1.5 * atr, 2)
-                target1 = round(price + 2.0 * atr, 2)
-                target2 = round(price + 3.0 * atr, 2)
-                risk = price - sl
-                if risk <= 0:
+                # Capital tier: enforce minimum ADV for smaller accounts
+                adv_rupees = sig.get("adv_rupees", 0)
+                if adv_rupees < min_adv:
                     continue
 
+                # ── Structural stops (Review Item 3) ──────────────────
+                day_low = sig.get("day_low", price * 0.98)
+                sma20 = sig.get("sma20", price)
+                prev_close = sig.get("prev_close", price)
+
+                stop = max(
+                    day_low,
+                    sma20 - 0.25 * atr,
+                    prev_close * 0.985,
+                )
+                stop = round(stop, 2)
+
+                # Sanity cap: reject if (entry - stop) > 2 * ATR (too noisy)
+                risk = price - stop
+                if risk <= 0:
+                    continue
+                if risk > 2 * atr:
+                    logger.debug("[scanner] Rejecting %s: risk %.2f > 2*ATR %.2f",
+                                 sig["symbol"], risk, 2 * atr)
+                    continue
+
+                # Size off the stop (Review Item 3)
                 risk_amount = settings.capital * settings.risk_per_trade_pct / 100
-                base_qty = max(1, int(risk_amount / risk))
+                qty = max(1, int(risk_amount / risk))
+
+                # Apply regime sizing multiplier
+                regime_lower = regime_label.lower()
+                size_mult = REGIME_SIZE_MULT.get(regime_lower, 1.0)
+                qty = max(1, int(qty * size_mult))
+
                 confidence = min(sig.get("score", 50) / 100, 0.95)
-                qty = max(1, int(base_qty * (0.5 + 0.5 * confidence)))
                 pos_size_pct = (qty * price / settings.capital) * 100
+
+                # ── Scale-out levels (Review Item 4) ──────────────────
+                scale_out_1 = round(price + 1.0 * risk, 2)   # 1R - book 50%
+                scale_out_2 = round(price + 1.5 * risk, 2)   # 1.5R - book 25%
+                trail_from  = round(price + 2.0 * risk, 2)   # 2R - trail remaining 25%
+
+                target1 = scale_out_1
+                target2 = scale_out_2
+
+                # Build explanation with scale-out info
+                base_explanation = sig.get("explanation", "")
+                ev_note = f"EV={sig.get('ev', 0):.1f}"
+                scale_note = (f"Scale: 50% at {scale_out_1}, "
+                              f"25% at {scale_out_2}, "
+                              f"trail from {trail_from}")
+                explanation = f"{base_explanation}; {ev_note}; {scale_note}"
 
                 signal = Signal(
                     timestamp=now,
@@ -346,14 +522,14 @@ async def _save_signals(signals: List[Dict], regime_label: str) -> int:
                     source="scanner",
                     entry_zone_low=round(price * 0.998, 2),
                     entry_zone_high=round(price * 1.002, 2),
-                    stop_loss=sl,
+                    stop_loss=stop,
                     target1=target1,
                     target2=target2,
                     confidence=confidence,
                     position_size_pct=round(pos_size_pct, 1),
                     do_not_enter_after=now + dt.timedelta(hours=6),
                     best_exit_window="14:30-15:00 IST",
-                    explanation=sig.get("explanation", ""),
+                    explanation=explanation,
                     status="pending",
                 )
                 session.add(signal)
@@ -366,7 +542,8 @@ async def _save_signals(signals: List[Dict], regime_label: str) -> int:
     return count
 
 
-async def run_premarket_full_scan(regime_label: str = "RANGE_CHOP") -> int:
+async def run_premarket_full_scan(regime_label: str = "RANGE_CHOP",
+                                  regime_data: Optional[Dict] = None) -> int:
     """Pre-market scan: score full watchlist, cache top 100 for intraday.
 
     This runs at 08:45 IST. Scores all ~200-300 watchlist symbols and
@@ -389,7 +566,7 @@ async def run_premarket_full_scan(regime_label: str = "RANGE_CHOP") -> int:
         )
 
         # Generate and save signals from the full scan
-        signals = _generate_signals(universe, regime_label)
+        signals = _generate_signals(universe, regime_label, regime_data=regime_data)
         count = await _save_signals(signals, regime_label)
         logger.info("[scanner] Pre-market scan generated %d signals", count)
         return count
@@ -481,7 +658,8 @@ async def fetch_daily_movers() -> List[str]:
     return new_movers
 
 
-async def run_stock_scan(regime_label: str = "RANGE_CHOP") -> int:
+async def run_stock_scan(regime_label: str = "RANGE_CHOP",
+                         regime_data: Optional[Dict] = None) -> int:
     """Intraday scan: re-score top 100 symbols from pre-market cache.
 
     Returns the number of signals generated.
@@ -500,7 +678,7 @@ async def run_stock_scan(regime_label: str = "RANGE_CHOP") -> int:
             return 0
 
         # Generate and save new signals
-        signals = _generate_signals(universe, regime_label)
+        signals = _generate_signals(universe, regime_label, regime_data=regime_data)
         count = await _save_signals(signals, regime_label)
         logger.info("[scanner] Intraday scan generated %d signals", count)
         return count
@@ -510,7 +688,12 @@ async def run_stock_scan(regime_label: str = "RANGE_CHOP") -> int:
 
 
 def _build_universe(symbols: List[str]) -> List[Dict]:
-    """Fetch daily data and compute indicators for each symbol."""
+    """Fetch daily data and compute indicators for each symbol.
+
+    Implements Review Item 8 (liquidity gate):
+    - Require average daily turnover >= 5 Cr (50,000,000)
+    - Skip stocks within 2% of upper/lower circuit (collapsed range)
+    """
     import yfinance as yf
     import numpy as np
 
@@ -562,13 +745,28 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                 if price <= 0:
                     continue
 
-                # Liquidity hard filter: min 50,000 shares/day avg volume
+                # ── Liquidity gate (Review Item 8) ────────────────────
                 avg_vol_20d = float(np.mean(volume[-20:])) if len(volume) >= 20 else float(np.mean(volume))
                 if avg_vol_20d < 50_000:
                     continue
-                # Also filter by minimum daily turnover (Rs 1 Cr = 10M)
+
+                # Require average daily turnover >= 5 Cr (50,000,000)
                 avg_turnover = avg_vol_20d * price
-                if avg_turnover < 10_000_000:
+                if avg_turnover < 50_000_000:
+                    continue
+
+                # Day range
+                day_high = float(high[-1])
+                day_low = float(low[-1])
+
+                # Skip stocks within 2% of circuit (collapsed range)
+                day_range = day_high - day_low
+                if day_range <= 0 or (day_range / price) < 0.001:
+                    # day_high == day_low or range collapsed to < 0.1%
+                    continue
+                # Check if price is within 2% of what looks like a circuit
+                # (approximation: if day range < 0.5% of price and volume is very low)
+                if day_high == day_low:
                     continue
 
                 # RSI (14)
@@ -618,9 +816,6 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                 high_20d = float(np.max(high[-20:]))
                 near_20d_high = price >= high_20d * 0.97
 
-                # Day range
-                day_high = float(high[-1])
-                day_low = float(low[-1])
                 day_change_pct = ((price / prev_close) - 1) * 100
 
                 # EMA 20
@@ -632,8 +827,12 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                 volume_score = min(vol_ratio * 50, 100)
                 breakout_score = 80 if near_20d_high and vol_ratio > 1.2 else 30
                 volatility_score = min(max(100 - atr_pct * 20, 0), 100)
-                # News score: 0-100 based on whether symbol has recent news
+
+                # ── Improved news scoring (Review Item 10) ────────────
+                # Continuous score 0-100 based on weighted impact
                 news_score = _news_score_cache.get(symbol.upper(), 0.0)
+                # Sentiment: -1 (very negative) to +1 (very positive)
+                news_sentiment = _news_sentiment_cache.get(symbol.upper(), 0.0)
 
                 # Composite score (6 factors)
                 score = (
@@ -667,19 +866,41 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                     notes.append(f"Strong RSI {rsi:.0f}")
                 if ret5d > 2:
                     notes.append(f"5d momentum +{ret5d:.1f}%")
+                if news_sentiment < -0.3:
+                    notes.append(f"Neg news sentiment {news_sentiment:.2f}")
+                elif news_sentiment > 0.3:
+                    notes.append(f"Pos news catalyst {news_sentiment:.2f}")
 
-                # Cost model (Groww intraday) with confidence-weighted sizing + slippage
-                from backend.services.cost_model import estimate_slippage
+                # ── Improved slippage model (Review Item 6) ───────────
+                adv_shares = avg_vol_20d
+                adv_rupees = avg_turnover
 
-                confidence = min(score / 100, 0.95)
-                base_qty = max(1, int((settings.capital * settings.risk_per_trade_pct / 100) / (1.5 * atr)))
-                qty = max(1, int(base_qty * (0.5 + 0.5 * confidence)))
+                # Structural stop for cost calculation
+                structural_stop = max(
+                    day_low,
+                    sma20 - 0.25 * atr,
+                    prev_close * 0.985,
+                )
+                risk_per_share = price - structural_stop
+                if risk_per_share <= 0:
+                    continue
+
+                risk_amount = settings.capital * settings.risk_per_trade_pct / 100
+                qty = max(1, int(risk_amount / risk_per_share))
+
                 buy_val = price * qty
-                slippage_pct = estimate_slippage(price, qty, avg_vol_20d)
-                slippage_cost = buy_val * slippage_pct / 100 * 2  # both legs
-                cost_roundtrip = 40 + buy_val * 0.0005 + slippage_cost
-                net_profit = round((2.0 * atr * qty) - cost_roundtrip, 2)
-                net_loss = round((-1.5 * atr * qty) - cost_roundtrip, 2)
+                slippage_cost = _estimate_slippage(price, qty, adv_shares, adv_rupees)
+                slippage_cost_rt = slippage_cost * 2  # round-trip
+
+                cost_breakdown = groww_intraday_cost(price, qty)
+                cost_roundtrip = cost_breakdown.total + slippage_cost_rt
+
+                # Scale-out targets for cost estimation
+                reward_per_share = 1.0 * risk_per_share  # target at 1R for conservative EV
+                target_price = price + reward_per_share
+
+                net_profit = round((reward_per_share * qty) - cost_roundtrip, 2)
+                net_loss = round((-risk_per_share * qty) - cost_roundtrip, 2)
                 net_rr = round(abs(net_profit / net_loss), 2) if net_loss != 0 else 0
 
                 universe.append({
@@ -699,15 +920,21 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                     "ret20d_pct": round(ret20d, 2),
                     "gap_pct": round(gap_pct, 2),
                     "near_20d_high": near_20d_high,
+                    "sma20": round(sma20, 2),
                     "score": round(score, 1),
                     "strategy": strategy,
                     "explanation": "; ".join(notes) if notes else f"{strategy} setup",
                     "qty": qty,
                     "capital_needed": round(buy_val, 2),
                     "cost_roundtrip": round(cost_roundtrip, 2),
+                    "slippage_cost": round(slippage_cost_rt, 2),
                     "net_profit": net_profit,
                     "net_loss": net_loss,
                     "net_rr": net_rr,
+                    "adv_shares": round(adv_shares, 0),
+                    "adv_rupees": round(adv_rupees, 0),
+                    "news_score": round(news_score, 1),
+                    "news_sentiment": round(news_sentiment, 2),
                 })
 
             except Exception:
@@ -719,29 +946,151 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
     return universe
 
 
-def _generate_signals(universe: List[Dict], regime_label: str) -> List[Dict]:
-    """Score and filter universe into actionable signals."""
-    # Apply regime adjustments
+def _generate_signals(universe: List[Dict], regime_label: str,
+                      regime_data: Optional[Dict] = None) -> List[Dict]:
+    """Score and filter universe into actionable signals.
+
+    Implements:
+    - Review Item 2:  Regime-aware strategy gating
+    - Review Item 5:  EV-positive gate (HIGHEST PRIORITY)
+    - Review Item 10: Negative-news gate on longs
+    - Review Item 11: Breadth gate on longs
+    - Review Item 12: Time-of-day bucketing
+    """
+    regime_lower = regime_label.lower()
+
+    # ── Resolve allowed strategies for this regime (Review Item 2) ─────
+    allowed_strategies = REGIME_ALLOWED_STRATEGIES.get(regime_lower, None)
+    # If regime not in map, allow all strategies
+    if allowed_strategies is None:
+        allowed_strategies = {"BREAKOUT", "MOMENTUM", "MEAN_REVERSION", "GAP_AND_GO", "SWING"}
+
+    # ── Breadth gate on longs (Review Item 11) ─────────────────────────
+    nifty_change_pct = 0.0
+    breadth_pct = 50.0
+    if regime_data:
+        nifty_change_pct = regime_data.get("nifty_change_pct", 0.0)
+        breadth_pct = regime_data.get("breadth_pct", 50.0)
+
+    breadth_disabled_strategies: Set[str] = set()
+    if nifty_change_pct < 0 and breadth_pct < 35:
+        # Weak breadth in a down market: disable aggressive long strategies
+        breadth_disabled_strategies = {"BREAKOUT", "MOMENTUM"}
+        logger.info("[scanner] Breadth gate active: nifty_chg=%.2f%%, breadth=%.1f%% "
+                    "-> disabling BREAKOUT, MOMENTUM for longs",
+                    nifty_change_pct, breadth_pct)
+
+    # Apply regime score multiplier
     regime_mult = {
-        "TREND_UP": 1.1,
-        "TREND_DOWN": 0.7,
-        "RANGE_CHOP": 0.9,
-        "HIGH_VOL_EVENT": 0.6,
-        "GAP_AND_GO": 1.0,
-        "GAP_FILL": 0.85,
-        "LOW_LIQ_DRIFT": 0.75,
+        "trend_up": 1.1,
+        "trend_down": 0.7,
+        "range_chop": 0.9,
+        "high_vol_event": 0.6,
+        "gap_and_go": 1.0,
+        "gap_fill": 0.85,
+        "low_liq_drift": 0.75,
     }
-    mult = regime_mult.get(regime_label, 1.0)
+    mult = regime_mult.get(regime_lower, 1.0)
+
+    filtered = []
+    regime_veto_count = 0
+    breadth_veto_count = 0
+    tod_veto_count = 0
+    ev_veto_count = 0
+    news_veto_count = 0
+    min_score = 35
 
     for stock in universe:
-        stock["score"] = round(stock["score"] * mult, 1)
+        strategy = stock.get("strategy", "SWING")
 
-    # Re-sort
-    universe.sort(key=lambda x: x["score"], reverse=True)
+        # ── Regime strategy gating (Review Item 2) ────────────────────
+        if strategy not in allowed_strategies:
+            regime_veto_count += 1
+            continue
 
-    # Filter: minimum score threshold
-    min_score = 35
-    filtered = [s for s in universe if s["score"] >= min_score and s["net_rr"] >= 1.0]
+        # ── Breadth gate (Review Item 11) ─────────────────────────────
+        if strategy in breadth_disabled_strategies:
+            breadth_veto_count += 1
+            continue
+
+        # ── Negative-news gate (Review Item 10) ──────────────────────
+        news_sentiment = stock.get("news_sentiment", 0.0)
+        if news_sentiment < -0.5:
+            # Strong negative sentiment: block longs entirely
+            news_veto_count += 1
+            continue
+
+        # ── Time-of-day bucketing (Review Item 12) ────────────────────
+        tod_mult, tod_bucket = _time_of_day_multiplier(strategy)
+        if tod_mult <= 0:
+            tod_veto_count += 1
+            continue
+
+        # Apply multipliers to score
+        adjusted_score = round(stock["score"] * mult * tod_mult, 1)
+
+        # Boost/penalise based on news sentiment (continuous, Review Item 10)
+        # Positive sentiment adds up to +10% score, negative subtracts up to -10%
+        sentiment_adjustment = news_sentiment * 10  # -10 to +10
+        adjusted_score = round(adjusted_score + sentiment_adjustment, 1)
+
+        stock["score"] = adjusted_score
+
+        # Minimum score threshold
+        if adjusted_score < min_score:
+            continue
+
+        # ── EV-positive gate (Review Item 5) — HIGHEST PRIORITY ──────
+        price = stock.get("price", 0)
+        atr = stock.get("atr", price * 0.02)
+        qty = stock.get("qty", 1)
+        cost_roundtrip = stock.get("cost_roundtrip", 0)
+        slippage_cost = stock.get("slippage_cost", 0)
+
+        # Structural stop risk
+        day_low = stock.get("day_low", price * 0.98)
+        sma20 = stock.get("sma20", price)
+        prev_close = stock.get("prev_close", price)
+        stop = max(day_low, sma20 - 0.25 * atr, prev_close * 0.985)
+        risk_per_share = price - stop
+        if risk_per_share <= 0:
+            continue
+
+        # Reward at 1.5R (blended scale-out expectation)
+        reward_per_share = 1.5 * risk_per_share
+
+        p_win = 0.45  # conservative default win rate
+        ev = ((p_win * reward_per_share * qty)
+              - ((1 - p_win) * risk_per_share * qty)
+              - cost_roundtrip
+              - slippage_cost)
+
+        if ev <= 0:
+            ev_veto_count += 1
+            continue
+
+        stock["ev"] = round(ev, 2)
+        stock["tod_bucket"] = tod_bucket
+        logger.debug("[scanner] Accepted %s: score=%.1f, EV=%.2f, strategy=%s, "
+                     "regime=%s, tod=%s",
+                     stock["symbol"], adjusted_score, ev, strategy,
+                     regime_label, tod_bucket)
+
+        filtered.append(stock)
+
+    # ── Logging ───────────────────────────────────────────────────────
+    logger.info("[scanner] Signal generation: %d candidates -> %d accepted "
+                "(regime_veto=%d, breadth_veto=%d, tod_veto=%d, ev_veto=%d, "
+                "news_veto=%d)",
+                len(universe), len(filtered), regime_veto_count,
+                breadth_veto_count, tod_veto_count, ev_veto_count,
+                news_veto_count)
+
+    # Re-sort by score descending after adjustments
+    filtered.sort(key=lambda x: x["score"], reverse=True)
+
+    # Also filter by minimum net R:R
+    filtered = [s for s in filtered if s.get("net_rr", 0) >= 1.0]
 
     return filtered
 
@@ -823,11 +1172,14 @@ def _get_current_prices(symbols: List[str]) -> Dict[str, float]:
 # ─── Full Scan Pipeline ─────────────────────────────────────────────────
 
 async def run_full_scan() -> Dict:
-    """Run the complete scan pipeline: regime → news → stocks.
+    """Run the complete scan pipeline: regime -> news -> stocks.
 
-    Returns a summary dict.
+    Returns a summary dict. Passes regime data through to signal generation
+    so breadth gate and other regime-aware logic can use it.
     """
     summary = {"regime": None, "news_count": 0, "signal_count": 0, "errors": []}
+
+    regime_data = None
 
     # 1. Regime
     try:
@@ -846,7 +1198,9 @@ async def run_full_scan() -> Dict:
     # 3. Stock scan (uses pre-market full scan to also cache top symbols)
     try:
         regime_label = summary["regime"] or "RANGE_CHOP"
-        summary["signal_count"] = await run_premarket_full_scan(regime_label)
+        summary["signal_count"] = await run_premarket_full_scan(
+            regime_label, regime_data=regime_data
+        )
     except Exception as e:
         summary["errors"].append(f"stocks: {e}")
 

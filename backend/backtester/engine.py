@@ -724,9 +724,13 @@ class BacktestEngine:
 
             qty = sig["qty"]
 
-            # Apply dynamic slippage (adverse = buy higher)
+            # Realistic entry fill (expert review item 14):
+            # Fill at next-bar open + half spread, not signal-bar close
+            avg_daily_turnover = avg_daily_volume * open_price
+            spread_bps = max(5, 1000 / max(open_price, 1))
+            half_spread_cost = 0.5 * (spread_bps / 10_000) * open_price
             slip_pct = estimate_slippage(open_price, qty, avg_daily_volume)
-            entry_price = round(open_price * (1 + slip_pct / 100), 2)
+            entry_price = round(open_price + half_spread_cost + open_price * slip_pct / 100, 2)
 
             capital_needed = entry_price * qty
             if capital_needed > self._cash:
@@ -830,9 +834,9 @@ class BacktestEngine:
             hold_days = (trade_date - date.fromisoformat(entry_date)).days
             hold_days = max(hold_days, 1)
 
-            # 1. Stop loss check
+            # 1. Stop loss check (realistic: fill at worst of stop or gap-down open)
             if bar_low <= stop:
-                exit_price = stop
+                exit_price = min(stop, bar_open)  # gap-down fills at open, not stop
                 exec_cost = total_execution_cost((entry_price + exit_price) / 2, qty, adv, self._cost_fn)
                 gross_pnl = (exit_price - entry_price) * qty
                 net_pnl = gross_pnl - exec_cost
@@ -862,8 +866,8 @@ class BacktestEngine:
                 closed_positions.append(pos)
                 continue
 
-            # 2. Target 2 check (full exit)
-            if bar_high >= t2:
+            # 2. Target 2 check (full exit) — bar must trade THROUGH, not just touch
+            if bar_high > t2:
                 exit_price = t2
                 exec_cost = total_execution_cost((entry_price + exit_price) / 2, qty, adv, self._cost_fn)
                 gross_pnl = (exit_price - entry_price) * qty
