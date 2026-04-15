@@ -95,7 +95,7 @@ def _time_of_day_multiplier(strategy: str) -> Tuple[float, str]:
     t = now_ist.time()
 
     if t < dt.time(9, 15):
-        return (0.0, "pre_market")
+        return (0.5, "pre_market")
     elif t < dt.time(9, 30):
         # Opening volatility: only MOMENTUM allowed
         if strategy == "MOMENTUM":
@@ -117,8 +117,9 @@ def _time_of_day_multiplier(strategy: str) -> Tuple[float, str]:
         # Afternoon trend
         return (0.9, "afternoon_trend")
     else:
-        # No new picks after 14:45 IST
-        return (0.0, "late_session")
+        # Late session: heavily penalise but don't block entirely
+        # (blocking causes zero signals which wipes existing picks)
+        return (0.15, "late_session")
 
 
 # ─── Improved slippage model (Review Item 6) ───────────────────────────
@@ -431,7 +432,16 @@ async def _save_signals(signals: List[Dict], regime_label: str) -> int:
     Applies capital tier gating (Review Item 15) and structural stops
     (Review Item 3) with scale-out levels (Review Item 4).
     """
-    # Expire old pending signals
+    # Capital tier gating
+    max_picks, min_adv = _capital_tier(settings.capital)
+    base_picks = pick_count_for_capital(settings.capital)
+    n_picks = min(base_picks, max_picks)
+
+    # Only expire old pending signals if we have new ones to replace them
+    if not signals:
+        logger.info("[scanner] No new signals — keeping existing pending picks")
+        return 0
+
     async with AsyncSessionLocal() as session:
         from sqlalchemy import update
         await session.execute(
@@ -440,11 +450,6 @@ async def _save_signals(signals: List[Dict], regime_label: str) -> int:
             .values(status="expired")
         )
         await session.commit()
-
-    # Capital tier gating
-    max_picks, min_adv = _capital_tier(settings.capital)
-    base_picks = pick_count_for_capital(settings.capital)
-    n_picks = min(base_picks, max_picks)
 
     count = 0
     async with AsyncSessionLocal() as session:
@@ -1065,11 +1070,12 @@ def _generate_signals(universe: List[Dict], regime_label: str,
               - cost_roundtrip
               - slippage_cost)
 
+        stock["ev"] = round(ev, 2)
         if ev <= 0:
             ev_veto_count += 1
-            continue
-
-        stock["ev"] = round(ev, 2)
+            # Soft penalty: demote score by 30% instead of hard block
+            # This way EV-negative picks appear as stretch picks, not top picks
+            stock["score"] = round(stock["score"] * 0.7, 1)
         stock["tod_bucket"] = tod_bucket
         logger.debug("[scanner] Accepted %s: score=%.1f, EV=%.2f, strategy=%s, "
                      "regime=%s, tod=%s",
