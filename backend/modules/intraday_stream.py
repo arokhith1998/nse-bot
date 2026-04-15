@@ -265,6 +265,67 @@ class IntraDayManager:
                 return factor
         return 0.0
 
+    # -- live features for scoring (M7) --------------------------------------
+
+    def get_live_features(self, symbol: str) -> Optional[Dict]:
+        """Return intraday features for scoring integration.
+
+        Returns dict with:
+          orb_high_15m, orb_low_15m, vwap, vwap_slope_5m,
+          rs_vs_nifty_15m, delta_proxy_5m, price_vs_vwap_pct
+        Returns None if no data available.
+        """
+        with self._lock:
+            session = self._sessions.get(symbol)
+            if session is None or session.last_price <= 0:
+                return None
+
+            price = session.last_price
+            vwap = session.vwap_state.vwap
+            orb_high, orb_low = session.opening_range.high, session.opening_range.low
+            if orb_low == float("inf"):
+                orb_low = 0.0
+
+            # VWAP slope from last 5 bars (5m)
+            vwap_slope = 0.0
+            bars_5m = session.bars_5m
+            if len(bars_5m) >= 2:
+                recent_tp = [(b.high + b.low + b.close) / 3 for b in bars_5m[-5:]]
+                if len(recent_tp) >= 2:
+                    vwap_slope = (recent_tp[-1] - recent_tp[0]) / max(recent_tp[0], 1) * 100
+
+            # Delta proxy: net volume direction from 5m bars
+            delta_proxy = 0.0
+            if len(bars_5m) >= 1:
+                for b in bars_5m[-5:]:
+                    if b.close >= b.open:
+                        delta_proxy += b.volume
+                    else:
+                        delta_proxy -= b.volume
+
+            # Price vs VWAP
+            price_vs_vwap_pct = ((price - vwap) / vwap * 100) if vwap > 0 else 0.0
+
+            # RS vs Nifty (placeholder — requires Nifty session)
+            nifty_session = self._sessions.get("NIFTY 50") or self._sessions.get("^NSEI")
+            rs_vs_nifty = 0.0
+            if nifty_session and nifty_session.last_price > 0:
+                nifty_bars = nifty_session.bars_5m
+                if len(nifty_bars) >= 3 and len(bars_5m) >= 3:
+                    stock_ret = (bars_5m[-1].close / bars_5m[-3].close - 1) * 100
+                    nifty_ret = (nifty_bars[-1].close / nifty_bars[-3].close - 1) * 100
+                    rs_vs_nifty = stock_ret - nifty_ret
+
+            return {
+                "orb_high_15m": round(orb_high, 2),
+                "orb_low_15m": round(orb_low, 2),
+                "vwap": round(vwap, 2),
+                "vwap_slope_5m": round(vwap_slope, 4),
+                "rs_vs_nifty_15m": round(rs_vs_nifty, 4),
+                "delta_proxy_5m": round(delta_proxy, 0),
+                "price_vs_vwap_pct": round(price_vs_vwap_pct, 2),
+            }
+
     # -- EOD flush -----------------------------------------------------------
 
     def flush_to_storage(self) -> Dict[str, int]:

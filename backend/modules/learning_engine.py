@@ -455,6 +455,114 @@ class LearningEngine:
         )
 
     # ------------------------------------------------------------------
+    # Veto-driven weight penalty (M12)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_veto_penalties(
+        regime: Optional[str] = None,
+        lookback_sessions: int = 60,
+    ) -> Dict[str, float]:
+        """Load vetoes from UserVeto table and compute per-strategy weight penalties.
+
+        Returns dict of {strategy: penalty_multiplier} where 1.0 = no penalty,
+        0.7 = max penalty (capped to prevent spammy users from zeroing weights).
+        """
+        try:
+            import asyncio
+            from sqlalchemy import select, func
+            from backend.database import AsyncSessionLocal
+            from backend.models import UserVeto
+
+            async def _fetch():
+                async with AsyncSessionLocal() as session:
+                    cutoff = datetime.now() - timedelta(days=lookback_sessions)
+                    # Group vetoes by reason (used as strategy proxy)
+                    result = await session.execute(
+                        select(
+                            UserVeto.reason,
+                            func.count(UserVeto.id),
+                        )
+                        .where(UserVeto.timestamp >= cutoff)
+                        .group_by(UserVeto.reason)
+                    )
+                    rows = result.all()
+                    penalties: Dict[str, float] = {}
+                    for reason, count in rows:
+                        # Each 5 vetoes reduces weight by 10%, capped at 0.7x
+                        penalty = max(0.7, 1.0 - (int(count) // 5) * 0.10)
+                        penalties[reason] = penalty
+                    return penalties
+
+            try:
+                loop = asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(asyncio.run, _fetch()).result(timeout=10)
+            except RuntimeError:
+                return asyncio.run(_fetch())
+        except Exception:
+            logger.debug("[learning] Could not load veto penalties")
+            return {}
+
+    # ------------------------------------------------------------------
+    # Learned hit rate for EV gate (M8)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def hit_rate_for(strategy: str, regime: str, min_sample: int = 20) -> Optional[float]:
+        """Return trailing 60-session win rate for (strategy, regime) combo.
+
+        Returns None if sample < min_sample (falls back to hardcoded 0.45).
+        """
+        try:
+            import asyncio
+            from sqlalchemy import select, func, and_
+            from backend.database import AsyncSessionLocal
+            from backend.models import Trade, Signal
+
+            async def _fetch():
+                async with AsyncSessionLocal() as session:
+                    result = await session.execute(
+                        select(
+                            func.count(Trade.id),
+                            func.sum(
+                                # 1 if winner, 0 if loser
+                                func.case(
+                                    (Trade.net_pnl > 0, 1),
+                                    else_=0,
+                                )
+                            ),
+                        )
+                        .join(Signal, Signal.id == Trade.signal_id)
+                        .where(
+                            and_(
+                                Trade.status == "closed",
+                                Signal.strategy == strategy,
+                                Signal.regime_at_entry == regime,
+                            )
+                        )
+                        .limit(60)
+                    )
+                    row = result.one()
+                    total = int(row[0] or 0)
+                    wins = int(row[1] or 0)
+                    if total < min_sample:
+                        return None
+                    return round(wins / total, 4)
+
+            try:
+                loop = asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(asyncio.run, _fetch()).result(timeout=10)
+            except RuntimeError:
+                return asyncio.run(_fetch())
+        except Exception:
+            logger.debug("[learning] Could not load hit rate for %s/%s", strategy, regime)
+            return None
+
+    # ------------------------------------------------------------------
     # Static counterfactual PnL loader (M5)
     # ------------------------------------------------------------------
 

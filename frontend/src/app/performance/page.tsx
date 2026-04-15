@@ -5,7 +5,7 @@ import { fetchPerformance } from "@/lib/api";
 import PerformanceChart from "@/components/PerformanceChart";
 import type { PerformanceData, FeatureWeight } from "@/lib/types";
 import { formatCurrency, formatPct } from "@/lib/constants";
-import { Brain, Target, TrendingUp, TrendingDown, BarChart2 } from "lucide-react";
+import { Brain, Target, TrendingUp, TrendingDown, BarChart2, Activity } from "lucide-react";
 
 export default function PerformancePage() {
   const [perf, setPerf] = useState<PerformanceData | null>(null);
@@ -149,6 +149,66 @@ export default function PerformancePage() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* M17: MAE/MFE Distributions */}
+      {perf && (perf.mae_distribution || perf.mfe_distribution) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {perf.mae_distribution && Object.values(perf.mae_distribution).some(v => v > 0) && (
+            <div className="bg-card border border-red/20 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <Activity className="w-4 h-4 text-red" />
+                <h2 className="text-xs font-semibold text-red uppercase tracking-wider">
+                  Max Adverse Excursion (MAE)
+                </h2>
+              </div>
+              <p className="text-[10px] text-mute mb-3">How far trades moved against you before closing</p>
+              <div className="flex items-end gap-1 h-28">
+                {Object.entries(perf.mae_distribution).map(([bucket, count]) => {
+                  const maxCount = Math.max(...Object.values(perf.mae_distribution!), 1);
+                  const h = (count / maxCount) * 100;
+                  return (
+                    <div key={bucket} className="flex-1 flex flex-col items-center gap-1">
+                      <span className="text-[9px] font-mono text-mute">{count}</span>
+                      <div
+                        className="w-full rounded-t bg-red/50"
+                        style={{ height: `${Math.max(h, 2)}%` }}
+                      />
+                      <span className="text-[8px] text-mute text-center leading-tight">{bucket}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {perf.mfe_distribution && Object.values(perf.mfe_distribution).some(v => v > 0) && (
+            <div className="bg-card border border-green/20 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <Activity className="w-4 h-4 text-green" />
+                <h2 className="text-xs font-semibold text-green uppercase tracking-wider">
+                  Max Favorable Excursion (MFE)
+                </h2>
+              </div>
+              <p className="text-[10px] text-mute mb-3">How far trades moved in your favor before closing</p>
+              <div className="flex items-end gap-1 h-28">
+                {Object.entries(perf.mfe_distribution).map(([bucket, count]) => {
+                  const maxCount = Math.max(...Object.values(perf.mfe_distribution!), 1);
+                  const h = (count / maxCount) * 100;
+                  return (
+                    <div key={bucket} className="flex-1 flex flex-col items-center gap-1">
+                      <span className="text-[9px] font-mono text-mute">{count}</span>
+                      <div
+                        className="w-full rounded-t bg-green/50"
+                        style={{ height: `${Math.max(h, 2)}%` }}
+                      />
+                      <span className="text-[8px] text-mute text-center leading-tight">{bucket}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

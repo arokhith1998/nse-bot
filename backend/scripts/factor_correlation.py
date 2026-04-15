@@ -183,9 +183,53 @@ def flag_redundant_pairs(corr: pd.DataFrame, threshold: float = 0.7) -> list[tup
     return flagged
 
 
+def compute_ic(picks: list[dict]) -> dict:
+    """M18: Compute per-factor Information Coefficient (IC).
+
+    IC = Spearman rank correlation between factor score and next-session return.
+    Since we don't have forward returns in picks data, we use day_change_pct
+    as a proxy for the realized return.
+
+    Returns dict of {factor: {ic, ic_abs_mean, sample_size, flag}}.
+    """
+    from scipy import stats
+
+    rows = []
+    returns = []
+    for p in picks:
+        factors = score_factors_from_pick(p)
+        ret = p.get("day_change_pct", p.get("ret5d_pct", None))
+        if factors and ret is not None:
+            rows.append(factors)
+            returns.append(float(ret))
+
+    if len(rows) < 20:
+        print(f"[warn] Only {len(rows)} samples — IC analysis needs >= 20")
+        return {}
+
+    df = pd.DataFrame(rows)
+    ret_arr = np.array(returns)
+
+    results = {}
+    for col in df.columns:
+        factor_arr = df[col].values
+        # Spearman rank correlation
+        rho, p_val = stats.spearmanr(factor_arr, ret_arr)
+        flag = "" if abs(rho) >= 0.02 else "PRUNE_CANDIDATE"
+        results[col] = {
+            "ic": round(float(rho), 4),
+            "p_value": round(float(p_val), 4),
+            "abs_ic": round(abs(float(rho)), 4),
+            "sample_size": len(rows),
+            "flag": flag,
+        }
+
+    return results
+
+
 def main():
     print("=" * 60)
-    print("FACTOR CORRELATION ANALYSIS")
+    print("FACTOR CORRELATION & IC ANALYSIS")
     print("=" * 60)
 
     # Step 1: Load from history
@@ -229,7 +273,25 @@ def main():
     else:
         print("  None found")
 
-    # Step 5: Recommendation
+    # Step 5: Information Coefficient (M18)
+    print(f"\n{'='*60}")
+    print("INFORMATION COEFFICIENT (IC) — Spearman rank vs forward return")
+    print("=" * 60)
+    ic_results = compute_ic(picks)
+    if ic_results:
+        for factor, metrics in sorted(ic_results.items(), key=lambda x: x[1]["abs_ic"], reverse=True):
+            flag_str = f"  *** {metrics['flag']}" if metrics["flag"] else ""
+            print(f"  {factor:12s}  IC={metrics['ic']:+.4f}  |IC|={metrics['abs_ic']:.4f}  "
+                  f"p={metrics['p_value']:.4f}  n={metrics['sample_size']}{flag_str}")
+        prune = [f for f, m in ic_results.items() if m["flag"]]
+        if prune:
+            print(f"\n  Factors with |IC| < 0.02 (prune candidates): {', '.join(prune)}")
+        else:
+            print(f"\n  All factors have |IC| >= 0.02 — none flagged for pruning")
+    else:
+        print("  Insufficient data for IC analysis")
+
+    # Step 6: Recommendation
     print(f"\n{'='*60}")
     print("RECOMMENDATION")
     print("=" * 60)

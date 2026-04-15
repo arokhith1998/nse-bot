@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { scoreColor, formatCurrency, formatNumber } from "@/lib/constants";
 import type { Pick, PreMarketWatchlistItem } from "@/lib/types";
+import { AlertTriangle, Link2 } from "lucide-react";
 
 type SortKey =
   | "score"
@@ -35,6 +36,36 @@ interface PicksTableProps {
   preMarketWatchlist?: PreMarketWatchlistItem[];
   candidatesScanned?: number;
   vetoBreakdown?: Record<string, number>;
+  correlatedPairs?: string[][];
+}
+
+// M14: Risk badges derived from pick data
+function RiskBadges({ pick }: { pick: Pick }) {
+  const badges: { label: string; color: string }[] = [];
+  if ((pick.atr_pct ?? 0) < 0.8)
+    badges.push({ label: "Low Range", color: "text-amber-400 bg-amber-400/10 border-amber-400/30" });
+  if ((pick.atr_pct ?? 0) > 4.5)
+    badges.push({ label: "High Vol", color: "text-red bg-red/10 border-red/30" });
+  if ((pick.vol_ratio ?? 0) > 5)
+    badges.push({ label: "Vol Spike", color: "text-amber-400 bg-amber-400/10 border-amber-400/30" });
+  if ((pick.gap_pct ?? 0) > 3)
+    badges.push({ label: "Large Gap", color: "text-amber-400 bg-amber-400/10 border-amber-400/30" });
+  if ((pick.gap_pct ?? 0) < -2)
+    badges.push({ label: "Gap Down", color: "text-red bg-red/10 border-red/30" });
+  if (badges.length === 0) return null;
+  return (
+    <>
+      {badges.map((b) => (
+        <span
+          key={b.label}
+          className={`inline-flex items-center gap-0.5 px-1 py-0.5 text-[9px] rounded border font-semibold ${b.color}`}
+        >
+          <AlertTriangle className="w-2.5 h-2.5" />
+          {b.label}
+        </span>
+      ))}
+    </>
+  );
 }
 
 function ScoreBadge({ score }: { score: number }) {
@@ -281,6 +312,45 @@ function ExpandedRow({
             )}
           </div>
 
+          {/* M16: Decision surface — price position gauge */}
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Target className="w-3 h-3 text-mute" />
+              <h4 className="text-[10px] text-mute uppercase tracking-wider font-semibold">
+                Price Position
+              </h4>
+            </div>
+            <div className="space-y-2 text-xs">
+              {/* Stop ← Price → Target gauge */}
+              {(() => {
+                const entry = pick.entry ?? pick.price;
+                const range = pick.target - pick.stop_loss;
+                const pos = range > 0 ? ((pick.price - pick.stop_loss) / range) * 100 : 50;
+                const clamped = Math.max(0, Math.min(100, pos));
+                return (
+                  <div>
+                    <div className="flex justify-between text-[9px] text-mute mb-1">
+                      <span>SL {pick.stop_loss.toFixed(0)}</span>
+                      <span>Entry {entry.toFixed(0)}</span>
+                      <span>Tgt {pick.target.toFixed(0)}</span>
+                    </div>
+                    <div className="relative h-2 bg-bg rounded-full overflow-hidden">
+                      <div className="absolute left-0 top-0 h-full bg-gradient-to-r from-red/60 via-yellow/40 to-green/60 w-full" />
+                      <div
+                        className="absolute top-0 w-1.5 h-full bg-ink rounded-full border border-bg"
+                        style={{ left: `${clamped}%`, transform: "translateX(-50%)" }}
+                      />
+                    </div>
+                    <div className="flex justify-between mt-1">
+                      <span className="text-mute">Risk: {((entry - pick.stop_loss) / (pick.atr_pct / 100 * pick.price || 1)).toFixed(1)} ATR</span>
+                      <span className="text-mute">R:R {(pick.net_rr ?? 0).toFixed(2)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+
           {/* Veto / Skip */}
           <div className="flex flex-col justify-center items-end">
             <button
@@ -337,6 +407,7 @@ function PicksSection({
   onSort,
   expandedRows,
   toggleRow,
+  correlatedPairs,
 }: {
   title: string;
   picks: Pick[];
@@ -346,6 +417,7 @@ function PicksSection({
   onSort: (key: SortKey) => void;
   expandedRows: Set<string>;
   toggleRow: (symbol: string) => void;
+  correlatedPairs?: string[][];
 }) {
   const sorted = useMemo(() => {
     const copy = [...picks];
@@ -438,7 +510,7 @@ function PicksSection({
                       <ScoreBadge score={pick.score} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold text-sm text-ink">
                           {pick.symbol}
                         </span>
@@ -448,6 +520,15 @@ function PicksSection({
                         {pick.near_20d_high && (
                           <span className="text-[9px] px-1 py-0.5 rounded bg-accent/10 text-accent border border-accent/20">
                             20D Hi
+                          </span>
+                        )}
+                        {/* M14: Risk badges */}
+                        <RiskBadges pick={pick} />
+                        {/* M15: Correlation warning */}
+                        {correlatedPairs?.some(pair => pair.includes(pick.symbol)) && (
+                          <span className="inline-flex items-center gap-0.5 px-1 py-0.5 text-[9px] rounded border text-orange-400 bg-orange-400/10 border-orange-400/30 font-semibold">
+                            <Link2 className="w-2.5 h-2.5" />
+                            Corr: {correlatedPairs.find(pair => pair.includes(pick.symbol))?.filter(s => s !== pick.symbol)?.[0]}
                           </span>
                         )}
                       </div>
@@ -509,6 +590,7 @@ export default function PicksTable({
   preMarketWatchlist,
   candidatesScanned,
   vetoBreakdown,
+  correlatedPairs,
 }: PicksTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -635,6 +717,7 @@ export default function PicksTable({
         onSort={handleSort}
         expandedRows={expandedRows}
         toggleRow={toggleRow}
+        correlatedPairs={correlatedPairs}
       />
 
       {stretchPicks.length > 0 && (
@@ -647,6 +730,7 @@ export default function PicksTable({
           onSort={handleSort}
           expandedRows={expandedRows}
           toggleRow={toggleRow}
+          correlatedPairs={correlatedPairs}
         />
       )}
     </div>

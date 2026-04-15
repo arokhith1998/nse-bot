@@ -246,16 +246,20 @@ class ExitEngine:
                 exit_reason_code=ExitReason.EOD_FORCED.value,
             )
 
-        # ---- 2. TARGET1_HIT (urgency 3) --------------------------------
-        if target1 > 0 and ltp >= target1:
+        # ---- 2. TARGET1_HIT — scale-out 1R: book 50% (urgency 3) --------
+        # M9: 3-step scale-out: 50% at T1 (1R), 25% at T2 (1.5R), trail 25%
+        t1_already_hit = trade.get("breakeven_moved", False)
+        t2_already_hit = trade.get("trail_active", False)
+
+        if target1 > 0 and ltp >= target1 and not t1_already_hit:
             new_stop = max(entry, stop_loss)  # move stop to break-even
             return ExitSignal(
                 trade_id=trade_id,
                 symbol=symbol,
                 action=ExitAction.PARTIAL_BOOK.value,
                 reason=(
-                    f"Target 1 hit! LTP {ltp:.2f} >= T1 {target1:.2f}. "
-                    f"Book 50%, trail rest with stop at {new_stop:.2f}."
+                    f"Scale-out 1R hit! LTP {ltp:.2f} >= T1 {target1:.2f}. "
+                    f"Book 50%, move stop to breakeven {new_stop:.2f}."
                 ),
                 urgency=3,
                 exit_price=ltp,
@@ -264,17 +268,39 @@ class ExitEngine:
                 new_stop=new_stop,
             )
 
-        # ---- 3. TARGET2_HIT (urgency 4) --------------------------------
-        if target2 > 0 and ltp >= target2:
+        # ---- 3. TARGET2_HIT — scale-out 1.5R: book 25% (urgency 3) ----
+        if target2 > 0 and ltp >= target2 and t1_already_hit and not t2_already_hit:
+            # Book 25% of original qty, activate trail for remaining 25%
+            vwap = float(mkt.get("vwap", 0))
+            trail_stop = max(entry, vwap if vwap > 0 else entry)
             return ExitSignal(
                 trade_id=trade_id,
                 symbol=symbol,
-                action=ExitAction.SELL_NOW.value,
-                reason=f"Target 2 hit! LTP {ltp:.2f} >= T2 {target2:.2f}. Full exit.",
-                urgency=4,
+                action=ExitAction.PARTIAL_BOOK.value,
+                reason=(
+                    f"Scale-out 1.5R hit! LTP {ltp:.2f} >= T2 {target2:.2f}. "
+                    f"Book 25%, trail remaining 25% with stop at {trail_stop:.2f}."
+                ),
+                urgency=3,
                 exit_price=ltp,
                 exit_reason_code=ExitReason.TARGET2_HIT.value,
+                partial_pct=25.0,
+                new_stop=trail_stop,
             )
+
+        # ---- 3b. Beyond 2R — full exit if price hits 2R+ and T2 done --
+        if target2 > 0 and t2_already_hit:
+            two_r = entry + 2 * (target1 - entry)  # 2R level
+            if ltp >= two_r:
+                return ExitSignal(
+                    trade_id=trade_id,
+                    symbol=symbol,
+                    action=ExitAction.SELL_NOW.value,
+                    reason=f"2R+ reached! LTP {ltp:.2f} >= 2R {two_r:.2f}. Close remaining.",
+                    urgency=4,
+                    exit_price=ltp,
+                    exit_reason_code=ExitReason.TARGET2_HIT.value,
+                )
 
         # ---- 4. VWAP_LOSS (urgency 4) ----------------------------------
         vwap = float(mkt.get("vwap", 0))

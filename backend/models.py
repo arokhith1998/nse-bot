@@ -197,6 +197,30 @@ class Trade(Base):
         Float, nullable=True,
         comment="Counterfactual net PnL if scored with static DEFAULT_WEIGHTS (for learning safeguard).",
     )
+    # M9: Scale-out tracking
+    scale_out_1_filled_qty: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, comment="Qty filled at scale-out 1 (1R).",
+    )
+    scale_out_1_price: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="Fill price at scale-out 1.",
+    )
+    scale_out_2_filled_qty: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, comment="Qty filled at scale-out 2 (1.5R).",
+    )
+    scale_out_2_price: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="Fill price at scale-out 2.",
+    )
+    remaining_qty: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, comment="Qty remaining after partial exits.",
+    )
+    trail_active: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True, default=False,
+        comment="True when trailing stop is active (after scale-out 2).",
+    )
+    breakeven_moved: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True, default=False,
+        comment="True when stop has been moved to breakeven after scale-out 1.",
+    )
 
     # ── Relationships ────────────────────────────────────────────────
     signal: Mapped["Signal"] = relationship(back_populates="trades")

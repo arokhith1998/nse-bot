@@ -44,6 +44,18 @@ logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
 
+# Singleton intraday manager reference (set by scheduler on startup)
+_intraday_mgr = None
+
+def set_intraday_manager(mgr) -> None:
+    """Called by scheduler to register the global IntraDayManager instance."""
+    global _intraday_mgr
+    _intraday_mgr = mgr
+
+def _get_intraday_manager():
+    """Return the global IntraDayManager, or None if not started."""
+    return _intraday_mgr
+
 # Default scoring weights
 DEFAULT_WEIGHTS: Dict[str, float] = {
     "trend": 0.25,
@@ -784,14 +796,34 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                 day_high = float(high[-1])
                 day_low = float(low[-1])
 
-                # Skip stocks within 2% of circuit (collapsed range)
+                # ── M10: Strengthen circuit / T2T / impact-cost filter ──
                 day_range = day_high - day_low
                 if day_range <= 0 or (day_range / price) < 0.001:
-                    # day_high == day_low or range collapsed to < 0.1%
                     continue
-                # Check if price is within 2% of what looks like a circuit
-                # (approximation: if day range < 0.5% of price and volume is very low)
                 if day_high == day_low:
+                    continue
+
+                # Near circuit detection: if price within 2% of day's extreme
+                # and range is collapsed (< 1% of price), likely circuit-hit
+                range_pct = (day_range / price) * 100
+                if range_pct < 1.0:
+                    # Check if LTP near upper or lower extreme
+                    if (price >= day_high * 0.98) or (price <= day_low * 1.02):
+                        continue
+
+                # Check for circuit hits in recent 5 sessions
+                recent_ranges = []
+                for k in range(-5, 0):
+                    if abs(k) < len(high):
+                        r = (float(high[k]) - float(low[k])) / max(float(close[k]), 1) * 100
+                        recent_ranges.append(r)
+                if recent_ranges and sum(1 for r in recent_ranges if r < 0.5) >= 2:
+                    # 2+ days with <0.5% range in last 5 sessions → likely circuit/T2T
+                    continue
+
+                # Non-Nifty impact cost proxy: reject if ADV < 10Cr for non-Nifty200
+                from backend.backtester.data_loader import NIFTY200_SYMBOLS
+                if symbol not in NIFTY200_SYMBOLS and avg_turnover < 10_00_00_000:
                     continue
 
                 # RSI (14)
@@ -882,6 +914,39 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                     + volatility_score * STATIC_WEIGHTS["volatility"]
                     + news_score * STATIC_WEIGHTS["news"]
                 )
+
+                # ── M7: Blend intraday features when available ────────
+                intraday_contrib = 0.0
+                daily_contrib = score
+                try:
+                    from backend.modules.intraday_stream import IntraDayManager
+                    now_ist = dt.datetime.now(IST)
+                    t = now_ist.time()
+                    if t >= dt.time(9, 30):
+                        # Try to get live features from the global manager
+                        mgr = _get_intraday_manager()
+                        if mgr is not None:
+                            features = mgr.get_live_features(symbol)
+                            if features:
+                                # Intraday score components
+                                vwap_score = 60 + features["price_vs_vwap_pct"] * 10  # above VWAP = bullish
+                                vwap_score = min(max(vwap_score, 0), 100)
+                                rs_score = 50 + features["rs_vs_nifty_15m"] * 20
+                                rs_score = min(max(rs_score, 0), 100)
+                                delta_score = 50 + (features["delta_proxy_5m"] / max(avg_vol_20d, 1)) * 100
+                                delta_score = min(max(delta_score, 0), 100)
+                                orb_score = 70 if (features["orb_high_15m"] > 0 and
+                                                   price > features["orb_high_15m"]) else 40
+
+                                intraday_avg = (vwap_score + rs_score + delta_score + orb_score) / 4
+
+                                # Session-phase blending: 09:30+ = 70% intraday, 30% daily
+                                if t >= dt.time(9, 30):
+                                    score = intraday_avg * 0.7 + score * 0.3
+                                    intraday_contrib = round(intraday_avg * 0.7, 1)
+                                    daily_contrib = round(score * 0.3, 1)
+                except Exception:
+                    pass  # graceful fallback to daily-only scoring
 
                 # Determine strategy
                 if near_20d_high and vol_ratio > 1.2:
@@ -1099,7 +1164,17 @@ def _generate_signals(universe: List[Dict], regime_label: str,
         # Reward at 1.5R (blended scale-out expectation)
         reward_per_share = 1.5 * risk_per_share
 
-        p_win = 0.45  # conservative default win rate
+        # M8: Use learned hit rate if available, else conservative default
+        p_win = 0.45
+        learned_p_win = None
+        try:
+            from backend.modules.learning_engine import LearningEngine
+            learned = LearningEngine.hit_rate_for(strategy, regime_lower)
+            if learned is not None:
+                p_win = learned
+                learned_p_win = learned
+        except Exception:
+            pass
         ev = ((p_win * reward_per_share * qty)
               - ((1 - p_win) * risk_per_share * qty)
               - cost_roundtrip
@@ -1111,6 +1186,8 @@ def _generate_signals(universe: List[Dict], regime_label: str,
 
         stock["ev"] = round(ev, 2)
         stock["tod_bucket"] = tod_bucket
+        stock["learned_p_win"] = learned_p_win
+        stock["p_win_used"] = round(p_win, 4)
         logger.debug("[scanner] Accepted %s: score=%.1f, EV=%.2f, strategy=%s, "
                      "regime=%s, tod=%s",
                      stock["symbol"], adjusted_score, ev, strategy,

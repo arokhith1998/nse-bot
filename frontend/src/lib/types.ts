@@ -74,6 +74,7 @@ export interface PicksResponse {
   capital_warning?: string | null;
   candidates_scanned?: number;
   veto_breakdown?: Record<string, number>;
+  correlated_pairs?: string[][];
 }
 
 export interface ScoreBreakdown {
@@ -204,6 +205,8 @@ export interface PerformanceData {
   // R-multiple distribution (expert review item 19)
   r_distribution?: Record<string, number>;
   expectancy?: number;
+  mae_distribution?: Record<string, number>;
+  mfe_distribution?: Record<string, number>;
 }
 
 export interface FeatureWeight {

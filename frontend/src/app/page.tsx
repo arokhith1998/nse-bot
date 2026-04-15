@@ -186,6 +186,7 @@ export default function DashboardPage() {
         preMarketWatchlist={picks?.pre_market_watchlist}
         candidatesScanned={picks?.candidates_scanned}
         vetoBreakdown={picks?.veto_breakdown}
+        correlatedPairs={picks?.correlated_pairs}
       />
 
       {/* Main Grid: Trades + News | Risk */}
