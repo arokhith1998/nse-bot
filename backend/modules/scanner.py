@@ -78,6 +78,7 @@ REGIME_ALLOWED_STRATEGIES: Dict[str, Set[str]] = {
     "low_liq_drift":  {"SWING"},
     "gap_and_go":     {"GAP_AND_GO", "MOMENTUM"},
     "gap_fill":       {"MEAN_REVERSION", "SWING"},
+    "unknown":        {"MEAN_REVERSION", "SWING"},  # V4-1: defensive only on bad data
 }
 
 # Regime-level sizing multipliers (e.g. reduced sizing in volatile regimes)
@@ -89,6 +90,7 @@ REGIME_SIZE_MULT: Dict[str, float] = {
     "low_liq_drift":  0.3,
     "gap_and_go":     1.0,
     "gap_fill":       0.85,
+    "unknown":        0.7,  # conservative sizing on bad data
 }
 
 # ─── Time-of-day buckets (Review Item 12) ──────────────────────────────
@@ -187,6 +189,21 @@ async def run_regime_scan() -> Optional[Dict]:
         if regime_data is None:
             logger.warning("[scanner] Regime classification returned None")
             return None
+
+        # V4-1: Detect garbage data at the WRITE path — before saving to DB
+        vix_val = regime_data.get("vix", 0.0)
+        breadth_val = regime_data.get("breadth_pct", 50.0)
+        vix_valid = vix_val is not None and vix_val > 0.5
+        breadth_valid = breadth_val is not None and breadth_val > 0
+
+        if not (vix_valid and breadth_valid):
+            logger.warning(
+                "[regime] WARN: VIX=%.1f breadth=%.1f — bad data, storing as UNKNOWN",
+                vix_val or 0, breadth_val or 0,
+            )
+            regime_data["label"] = "unknown"
+            regime_data["sub_regime"] = "bad_data"
+            regime_data["confidence"] = 0.0
 
         # Save to database
         async with AsyncSessionLocal() as session:
