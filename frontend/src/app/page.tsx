@@ -149,8 +149,8 @@ export default function DashboardPage() {
         <div className="text-xs text-mute">
           {picks && (
             <span>
-              Universe: {picks.universe_size.toLocaleString()} | Scored:{" "}
-              {picks.scored.toLocaleString()} | Trade for: {picks.trade_for}
+              Candidates: {(picks.candidates_scanned ?? picks.universe_size).toLocaleString()} | Picks:{" "}
+              {(picks.top_picks.length + picks.stretch_picks.length).toLocaleString()} | Trade for: {picks.trade_for}
             </span>
           )}
         </div>

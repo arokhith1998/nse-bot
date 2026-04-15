@@ -603,7 +603,8 @@ async def run_premarket_full_scan(regime_label: str = "RANGE_CHOP",
         pre_market = now_ist.time() < dt.time(9, 15)
         status = "watchlist" if pre_market else "pending"
 
-        signals = _generate_signals(universe, regime_label, regime_data=regime_data)
+        signals = _generate_signals(universe, regime_label, regime_data=regime_data,
+                                     skip_tod_gate=pre_market)
         count = await _save_signals(signals, regime_label, signal_status=status)
         logger.info("[scanner] Pre-market scan generated %d %s signals", count, status)
         return count
@@ -1052,7 +1053,8 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
 
 
 def _generate_signals(universe: List[Dict], regime_label: str,
-                      regime_data: Optional[Dict] = None) -> List[Dict]:
+                      regime_data: Optional[Dict] = None,
+                      skip_tod_gate: bool = False) -> List[Dict]:
     """Score and filter universe into actionable signals.
 
     Implements:
@@ -1126,10 +1128,13 @@ def _generate_signals(universe: List[Dict], regime_label: str,
             continue
 
         # ── Time-of-day bucketing (Review Item 12) ────────────────────
-        tod_mult, tod_bucket = _time_of_day_multiplier(strategy)
-        if tod_mult <= 0:
-            tod_veto_count += 1
-            continue
+        if skip_tod_gate:
+            tod_mult, tod_bucket = 1.0, "pre_market_bypass"
+        else:
+            tod_mult, tod_bucket = _time_of_day_multiplier(strategy)
+            if tod_mult <= 0:
+                tod_veto_count += 1
+                continue
 
         # Apply multipliers to score
         adjusted_score = round(stock["score"] * mult * tod_mult, 1)

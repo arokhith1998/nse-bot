@@ -392,9 +392,22 @@ async def get_regime(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
         "choppy": "RANGE_BOUND",
     }
 
-    label = label_map.get(snap.regime_label, snap.regime_label)
+    raw_label = label_map.get(snap.regime_label, snap.regime_label)
+
+    # V4-1: Detect garbage data — VIX=0 or breadth=0 means feed is down
+    vix_valid = snap.vix is not None and snap.vix > 0.5
+    breadth_valid = snap.breadth_pct is not None and snap.breadth_pct > 0
+    data_available = vix_valid and breadth_valid
+
+    if not data_available:
+        logger.warning("[regime] Bad data detected: VIX=%.1f breadth=%.1f — defaulting to UNKNOWN",
+                       snap.vix or 0, snap.breadth_pct or 0)
+        label = "UNKNOWN"
+    else:
+        label = raw_label
 
     descriptions = {
+        "UNKNOWN": "Regime pending — market data unavailable (VIX/breadth feed down)",
         "TRENDING_UP": "Market in uptrend — momentum and breakout setups favoured",
         "TRENDING_DOWN": "Market in downtrend — defensive positioning, tighter stops",
         "RANGE_BOUND": "Choppy/range-bound market — mean reversion setups preferred",
@@ -412,6 +425,7 @@ async def get_regime(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
         "RISK_ON": 1.15,
         "RISK_OFF": 0.65,
         "EXHAUSTION": 0.75,
+        "UNKNOWN": 1.0,
     }
 
     # Strategy gating based on regime
@@ -423,6 +437,7 @@ async def get_regime(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
         "RISK_ON": {"allowed": ["Breakout", "Momentum", "Gap & Go"], "disallowed": ["Shorts"]},
         "RISK_OFF": {"allowed": ["Mean Reversion"], "disallowed": ["Breakout", "All Longs"]},
         "EXHAUSTION": {"allowed": ["Swing (tiny size)"], "disallowed": ["Breakout", "Momentum", "Gap & Go"]},
+        "UNKNOWN": {"allowed": ["Swing", "Mean Reversion", "Momentum", "Breakout"], "disallowed": []},
     }
     strategies = REGIME_STRATEGIES.get(label, {"allowed": ["Swing"], "disallowed": []})
 

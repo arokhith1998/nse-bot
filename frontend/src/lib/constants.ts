@@ -69,6 +69,11 @@ export const REGIME_CONFIG: Record<
     color: "text-yellow",
     bg: "bg-yellow/15",
   },
+  UNKNOWN: {
+    label: "Data Pending",
+    color: "text-mute",
+    bg: "bg-mute/15",
+  },
 };
 
 // -- Exit action config -----------------------------------------------------

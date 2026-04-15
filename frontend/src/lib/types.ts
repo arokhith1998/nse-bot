@@ -150,7 +150,8 @@ export type RegimeLabel =
   | "TRENDING_DOWN"
   | "RANGE_BOUND"
   | "HIGH_VOL"
-  | "EXHAUSTION";
+  | "EXHAUSTION"
+  | "UNKNOWN";
 
 export interface RegimeState {
   label: RegimeLabel;
