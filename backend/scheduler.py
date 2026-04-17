@@ -142,16 +142,21 @@ async def job_eod_cleanup() -> None:
         import datetime as dt
 
         async with AsyncSessionLocal() as session:
-            # Expire stale signals
+            # V5-5: Only expire pending signals older than 18 hours
+            # (preserves today's trading signals so overnight-to-morning
+            # gap doesn't leave the UI empty). Watchlist signals are never
+            # expired here — they're tomorrow's pre-market candidates.
+            signal_cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=18)
             await session.execute(
                 update(Signal)
                 .where(Signal.status == "pending")
+                .where(Signal.timestamp < signal_cutoff)
                 .values(status="expired")
             )
             # Delete news older than 3 days
-            cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=3)
+            news_cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=3)
             await session.execute(
-                delete(NewsItem).where(NewsItem.timestamp < cutoff)
+                delete(NewsItem).where(NewsItem.timestamp < news_cutoff)
             )
             await session.commit()
         logger.info("[scheduler] EOD cleanup complete.")
@@ -165,13 +170,14 @@ def _register_jobs(sched: AsyncIOScheduler) -> None:
     """Register all scheduled jobs on the given scheduler instance."""
 
     # Pre-market scan at 08:45 IST, Mon-Fri
+    # V5-4: 30-min grace so a cold-start at 09:00 still fires the job
     sched.add_job(
         job_pre_market_scan,
         CronTrigger(hour=8, minute=45, day_of_week="mon-fri", timezone=_TZ),
         id="pre_market_scan",
         name="Pre-market scan (08:45 IST)",
         replace_existing=True,
-        misfire_grace_time=300,
+        misfire_grace_time=1800,
     )
 
     # Daily movers catch-net at 09:20 IST, Mon-Fri
@@ -185,6 +191,10 @@ def _register_jobs(sched: AsyncIOScheduler) -> None:
     )
 
     # Intraday scan every N minutes during market hours, Mon-Fri
+    # V5-4: Use a rolling "today at market open" start so IntervalTrigger
+    # fire times align with 09:15, 09:30, ... instead of drifting from 2024.
+    import datetime as _dt
+    import pytz as _pytz
     open_h, open_m = (int(x) for x in settings.market_open.split(":"))
     close_h, close_m = (int(x) for x in settings.market_close.split(":"))
     end_h, end_m = close_h, close_m - 15
@@ -192,11 +202,16 @@ def _register_jobs(sched: AsyncIOScheduler) -> None:
         end_h -= 1
         end_m += 60
 
+    _ist_tz = _pytz.timezone(_TZ)
+    _today_ist = _dt.datetime.now(_ist_tz).replace(
+        hour=open_h, minute=open_m, second=0, microsecond=0,
+    )
+
     sched.add_job(
         job_market_hours_scan,
         IntervalTrigger(
             minutes=settings.scan_interval_min,
-            start_date=f"2024-01-01 {open_h:02d}:{open_m:02d}:00",
+            start_date=_today_ist,
             timezone=_TZ,
         ),
         id="market_hours_scan",

@@ -846,3 +846,35 @@ async def trigger_scan() -> Dict[str, Any]:
         return {"status": "ok", "summary": summary}
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+# ── GET /api/debug/scheduler ───────────────────────────────────────────
+# V5-4: Verify scheduler jobs are registered and firing
+
+@router.get("/api/debug/scheduler")
+async def debug_scheduler() -> Dict[str, Any]:
+    """Return scheduler state so we can verify jobs fire after deploy."""
+    try:
+        from backend.scheduler import scheduler
+        from backend.modules.scanner import SCAN_UNIVERSE, SCAN_UNIVERSE_TOP
+        jobs_info = []
+        if scheduler is not None:
+            for job in scheduler.get_jobs():
+                jobs_info.append({
+                    "id": job.id,
+                    "name": job.name,
+                    "next_run_time": (
+                        job.next_run_time.isoformat()
+                        if job.next_run_time else None
+                    ),
+                    "trigger": str(job.trigger),
+                })
+        return {
+            "scheduler_running": scheduler is not None and scheduler.running,
+            "jobs": jobs_info,
+            "universe_size": len(SCAN_UNIVERSE),
+            "scan_universe_top_size": len(SCAN_UNIVERSE_TOP),
+            "now_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}

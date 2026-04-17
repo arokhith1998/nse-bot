@@ -210,8 +210,13 @@ class RegimeEngine:
     def classify(self) -> RegimeState:
         """Run regime classification and return a ``RegimeState``."""
         nifty_df = self._fetch_nifty_history()
-        vix_val = self._fetch_vix()
-        breadth = self._estimate_breadth(nifty_df)
+        vix_val, vix_is_real = self._fetch_vix()  # V5-2: track real vs fallback
+        # V5-1: Try real breadth first, fall back to heuristic
+        breadth = self._fetch_real_breadth()
+        breadth_is_real = breadth is not None
+        if not breadth_is_real:
+            breadth = self._estimate_breadth(nifty_df)
+            logger.warning("[regime] Real breadth unavailable, using EMA heuristic: %.1f", breadth)
 
         if nifty_df is None or nifty_df.empty:
             logger.warning("No Nifty history available; defaulting to RANGE_CHOP")
@@ -241,12 +246,13 @@ class RegimeEngine:
         sub = ""
         confidence = 0.5
 
+        # V5-2: Only apply VIX-dependent branches when VIX is real
         # 1. HIGH_VOL_EVENT: VIX > 25 or VIX spike > 15%
-        if vix_val > 25:
+        if vix_is_real and vix_val > 25:
             regime = Regime.HIGH_VOL_EVENT
             sub = "elevated_vix"
             confidence = min(0.95, 0.6 + (vix_val - 25) * 0.02)
-        elif self._vix_spike(nifty_df, vix_val):
+        elif vix_is_real and self._vix_spike(nifty_df, vix_val):
             regime = Regime.HIGH_VOL_EVENT
             sub = "vix_spike"
             confidence = 0.7
@@ -271,17 +277,28 @@ class RegimeEngine:
                 sub = "thin_volume_narrow_range"
                 confidence = 0.6
 
-        # 4. TREND_UP
-        elif nifty_price > ema20 > ema50 and vix_val < 18 and breadth > 60:
+        # 4. TREND_UP — V5-1: relaxed breadth threshold to 40 (was 60),
+        #    and skip VIX requirement when VIX is a fallback
+        elif (
+            nifty_price > ema20 > ema50
+            and breadth > 40
+            and (not vix_is_real or vix_val < 18)
+        ):
             regime = Regime.TREND_UP
             sub = "strong" if adx_val > 25 else "mild"
-            confidence = min(0.95, 0.6 + (breadth - 60) * 0.005 + (25 - vix_val) * 0.01)
+            vix_bonus = (25 - vix_val) * 0.01 if vix_is_real else 0.05
+            confidence = min(0.95, 0.6 + max(0, breadth - 40) * 0.005 + vix_bonus)
 
-        # 5. TREND_DOWN
-        elif nifty_price < ema20 < ema50 and vix_val > 22 and breadth < 40:
+        # 5. TREND_DOWN — V5-2: skip VIX requirement on fallback
+        elif (
+            nifty_price < ema20 < ema50
+            and breadth < 40
+            and (not vix_is_real or vix_val > 22)
+        ):
             regime = Regime.TREND_DOWN
             sub = "strong" if adx_val > 25 else "mild"
-            confidence = min(0.95, 0.6 + (40 - breadth) * 0.005 + (vix_val - 22) * 0.01)
+            vix_bonus = (vix_val - 22) * 0.01 if vix_is_real else 0.05
+            confidence = min(0.95, 0.6 + (40 - breadth) * 0.005 + vix_bonus)
 
         # 6. RANGE_CHOP (default / fallback)
         else:
@@ -290,6 +307,14 @@ class RegimeEngine:
             confidence = 0.5
 
         modifiers = _REGIME_MODIFIERS.get(regime, {})
+
+        # V5-1/V5-2: encode data-quality flags into notes for downstream scanner check
+        notes_parts = []
+        if not vix_is_real:
+            notes_parts.append("vix_fallback")
+        if not breadth_is_real:
+            notes_parts.append("breadth_fallback")
+        notes_str = ",".join(notes_parts)
 
         state = RegimeState(
             label=regime,
@@ -304,6 +329,7 @@ class RegimeEngine:
             breadth_pct=round(breadth, 2),
             gap_pct=round(gap_pct, 2),
             volume_ratio=round(vol_ratio, 2),
+            notes=notes_str,
         )
 
         self._history.append(RegimeSnapshot(
@@ -337,18 +363,66 @@ class RegimeEngine:
         # Fallback to provider
         return self._provider.get_history(self._nifty_sym, days=100, interval="1d")
 
-    def _fetch_vix(self) -> float:
-        """Return India VIX value; default 16.0 on failure."""
+    def _fetch_vix(self) -> tuple[float, bool]:
+        """Return (India VIX value, is_real_value). V5-2: track fallback."""
         try:
             import yfinance as yf
             tkr = yf.Ticker(self._vix_sym)
             info = tkr.fast_info
             val = float(getattr(info, "last_price", 0) or 0)
             if val > 0:
-                return val
+                return val, True
         except Exception:
             pass
-        return 16.0  # safe default when VIX unavailable
+        # nsepython fallback — try live NSE feed before giving up
+        try:
+            from nsepython import nse_fno  # noqa: F401
+            from nsepython import nse_get_index_quote
+            data = nse_get_index_quote("INDIA VIX")
+            if isinstance(data, dict):
+                val = float(data.get("lastPrice") or data.get("last") or 0)
+                if val > 0:
+                    return val, True
+        except Exception:
+            pass
+        logger.warning("[regime] VIX fetch failed — using fallback 16.0 (not real)")
+        return 16.0, False
+
+    def _fetch_real_breadth(self) -> Optional[float]:
+        """V5-1: Fetch real advance/decline breadth from NSE.
+
+        Returns breadth % (advances / (advances+declines) * 100), or None
+        if the live feed is unavailable.
+        """
+        try:
+            from nsepython import nse_get_advances_declines
+            df = nse_get_advances_declines()
+            if df is None:
+                return None
+            # nsepython returns a DataFrame with advances/declines columns
+            if hasattr(df, "iloc") and len(df) > 0:
+                advances = declines = 0
+                for _, row in df.iterrows():
+                    advances += int(row.get("advances", 0) or 0)
+                    declines += int(row.get("declines", 0) or 0)
+                total = advances + declines
+                if total > 0:
+                    return round(advances / total * 100, 2)
+        except Exception as e:
+            logger.debug("[regime] nse_get_advances_declines failed: %s", e)
+        # Secondary: Nifty 500 percent-above-20dma proxy from market_status
+        try:
+            from nsepython import nse_market_status
+            data = nse_market_status()
+            if isinstance(data, dict):
+                adv = int(data.get("advances", 0) or 0)
+                dec = int(data.get("declines", 0) or 0)
+                total = adv + dec
+                if total > 0:
+                    return round(adv / total * 100, 2)
+        except Exception as e:
+            logger.debug("[regime] nse_market_status failed: %s", e)
+        return None
 
     def _vix_spike(self, nifty_df: pd.DataFrame, current_vix: float) -> bool:
         """Heuristic: VIX spike > 15 % above its own 5-day mean.

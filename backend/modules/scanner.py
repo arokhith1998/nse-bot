@@ -71,14 +71,14 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
 # Maps regime_label -> set of allowed strategies.
 # Strategies not in the allowed set are vetoed for that regime.
 REGIME_ALLOWED_STRATEGIES: Dict[str, Set[str]] = {
-    "trend_up":       {"BREAKOUT", "MOMENTUM", "GAP_AND_GO", "SWING"},
+    "trend_up":       {"BREAKOUT", "MOMENTUM", "GAP_AND_GO", "SWING", "RANGE_PLAY"},
     "trend_down":     {"MEAN_REVERSION"},
-    "range_chop":     {"MEAN_REVERSION", "SWING"},
+    "range_chop":     {"MEAN_REVERSION", "SWING", "RANGE_PLAY"},  # V5-3: + RANGE_PLAY
     "high_vol_event": {"SWING"},
-    "low_liq_drift":  {"SWING"},
+    "low_liq_drift":  {"SWING", "RANGE_PLAY"},
     "gap_and_go":     {"GAP_AND_GO", "MOMENTUM"},
-    "gap_fill":       {"MEAN_REVERSION", "SWING"},
-    "unknown":        {"MEAN_REVERSION", "SWING"},  # V4-1: defensive only on bad data
+    "gap_fill":       {"MEAN_REVERSION", "SWING", "RANGE_PLAY"},
+    "unknown":        {"MEAN_REVERSION", "SWING", "RANGE_PLAY"},  # V5-3: + RANGE_PLAY
 }
 
 # Regime-level sizing multipliers (e.g. reduced sizing in volatile regimes)
@@ -190,16 +190,22 @@ async def run_regime_scan() -> Optional[Dict]:
             logger.warning("[scanner] Regime classification returned None")
             return None
 
-        # V4-1: Detect garbage data at the WRITE path — before saving to DB
+        # V4-1 + V5-2: Detect garbage data at the WRITE path.
+        # Only store UNKNOWN if BOTH VIX and breadth are unavailable (both fallbacks).
+        # A single fallback is acceptable — the regime_engine decision tree already
+        # skips VIX-dependent branches when VIX is fallback.
         vix_val = regime_data.get("vix", 0.0)
         breadth_val = regime_data.get("breadth_pct", 50.0)
-        vix_valid = vix_val is not None and vix_val > 0.5
-        breadth_valid = breadth_val is not None and breadth_val > 0
+        notes = regime_data.get("notes", "") or ""
+        vix_is_fallback = "vix_fallback" in notes or (vix_val is None or vix_val <= 0.5)
+        breadth_is_fallback = "breadth_fallback" in notes
+        breadth_zero = breadth_val is None or breadth_val == 0
 
-        if not (vix_valid and breadth_valid):
+        if (vix_is_fallback and breadth_is_fallback) or breadth_zero:
             logger.warning(
-                "[regime] WARN: VIX=%.1f breadth=%.1f — bad data, storing as UNKNOWN",
-                vix_val or 0, breadth_val or 0,
+                "[regime] WARN: VIX=%.1f (fallback=%s) breadth=%.1f (fallback=%s) "
+                "— both feeds unavailable, storing as UNKNOWN",
+                vix_val or 0, vix_is_fallback, breadth_val or 0, breadth_is_fallback,
             )
             regime_data["label"] = "unknown"
             regime_data["sub_regime"] = "bad_data"
@@ -264,6 +270,8 @@ def _classify_regime() -> Optional[Dict]:
             data["volume_ratio"] = getattr(state, 'volume_ratio', 1.0)
             data["advance_decline"] = getattr(state, 'advance_decline', 1.0)
             data["scoring_adjustments"] = getattr(state, 'scoring_adjustments', {})
+            # V5-1/V5-2: carry data-quality notes through for UNKNOWN detection
+            data["notes"] = getattr(state, 'notes', '') or ''
 
             # Derive trends from price vs EMAs
             nifty = data["nifty_price"]
@@ -966,15 +974,17 @@ def _build_universe(symbols: List[str]) -> List[Dict]:
                 except Exception:
                     pass  # graceful fallback to daily-only scoring
 
-                # Determine strategy
+                # V5-3: Determine strategy — widened MR criteria, added RANGE_PLAY
                 if near_20d_high and vol_ratio > 1.2:
                     strategy = "BREAKOUT"
-                elif rsi > 50 and ret5d > 2:
+                elif rsi > 60 and ret5d > 3:          # V5-3: tighter — only strong momentum
                     strategy = "MOMENTUM"
-                elif bb_position < 0.2 and rsi < 35:
+                elif bb_position < 0.35 and rsi < 45:  # V5-3: wider — catch more MR setups
                     strategy = "MEAN_REVERSION"
                 elif gap_pct > 0.5 and vol_ratio > 1.5:
                     strategy = "GAP_AND_GO"
+                elif 0.3 < bb_position < 0.7 and 40 < rsi < 60:
+                    strategy = "RANGE_PLAY"            # V5-3: NEW — range-bound names
                 else:
                     strategy = "SWING"
 
@@ -1183,11 +1193,23 @@ def _generate_signals(universe: List[Dict], regime_label: str,
         if risk_per_share <= 0:
             continue
 
-        # Reward at 1.5R (blended scale-out expectation)
-        reward_per_share = 1.5 * risk_per_share
+        # V5-6: Reward at 2.0R — scale-out trails can exceed 2R on winners
+        reward_per_share = 2.0 * risk_per_share
 
-        # M8: Use learned hit rate if available, else conservative default
-        p_win = 0.45
+        # V5-6: Strategy-dependent p_win priors when no learned data
+        # Reflects reality: BREAKOUT low hit rate / high payoff,
+        # MEAN_REVERSION higher hit rate / lower payoff
+        _STRATEGY_PRIOR_PWIN = {
+            "BREAKOUT": 0.42,
+            "MOMENTUM": 0.48,
+            "MEAN_REVERSION": 0.52,
+            "GAP_AND_GO": 0.45,
+            "RANGE_PLAY": 0.50,
+            "SWING": 0.47,
+        }
+
+        # M8: Use learned hit rate if available, else strategy-specific prior
+        p_win = _STRATEGY_PRIOR_PWIN.get(strategy, 0.45)
         learned_p_win = None
         try:
             from backend.modules.learning_engine import LearningEngine
